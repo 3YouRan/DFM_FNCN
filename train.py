@@ -127,6 +127,8 @@ def main():
 
         if test_acc > best_acc:
             best_acc = test_acc
+            torch.save(model,"./best_model.pth")
+            print("已保存最佳权重")
 
     print(f"训练结束! 最佳测试准确率: {best_acc:.2f}%")
 
