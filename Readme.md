@@ -71,7 +71,7 @@ pip install Pillow
 2. 设置 MODEL\_TYPE: 选择 'DFM\_FNCN'（论文模型）或 'TRADITIONAL\_CNN'（基准模型）。  
 3. 设置 EXTRACTOR\_TYPE: 选择 'RESNET18\_PRETRAINED', 'VGG16\_PRETRAINED' 或 'SIMPLE\_CNN'。  
 4. **训练**: 运行训练脚本。  
-   python train.py
+   ```python train.py```
 
 5. 输出: 脚本会自动在 checkpoints/ 目录下创建一个唯一的、带时间戳的目录，例如 checkpoints/DFM\_FNCN\_RESNET18\_PRETRAINED\_20251111\_1830。  
    所有训练结果，包括 best\_model.pth，都会保存在这个新目录中。
@@ -84,7 +84,7 @@ pip install Pillow
    RUN\_DIR\_TO\_VALIDATE \= './checkpoints/DFM\_FNCN\_RESNET18\_PRETRAINED\_20251111\_1830'
 
 3. **运行**:  
-   python validation.py
+   ```python validation.py```
 
 4. 输出: 脚本会自动从目录名中推断模型配置，加载模型，并在控制台打印详细的分类报告。  
    classification\_report.csv 和 confusion\_matrix.png 将被保存到您的运行目录中。
@@ -96,10 +96,10 @@ pip install Pillow
 1. **配置**: 打开 train\_decoder.py。  
 2. 将顶部的 RUN\_DIR\_TO\_LOAD 变量设置为您要可视化的 DFM\_FNCN **运行目录路径**。  
    \# 示例:  
-   RUN\_DIR\_TO\_LOAD \= './checkpoints/DFM\_FNCN\_RESNET18\_PRETRAINED\_20251111\_1830'
+   ```RUN\_DIR\_TO\_LOAD \= './checkpoints/DFM\_FNCN\_RESNET18\_PRETRAINED\_20251111\_1830'```
 
 3. **运行**:  
-   python train\_decoder.py
+   ```python train\_decoder.py```
 
 4. **输出**: 脚本会加载 best\_model.pth，提取其编码器，训练一个对称的解码器，并将 decoder.pth 保存回**相同**的运行目录中。
 
@@ -110,10 +110,9 @@ pip install Pillow
 1. **配置**: 打开 visualize\_rule.py。  
 2. 将顶部的 RUN\_DIR\_TO\_VISUALIZE 变量设置为您的**运行目录路径**。  
    \# 示例:  
-   RUN\_DIR\_TO\_VISUALIZE \= './checkpoints/DFM\_FNCN\_RESNET18\_PRETRAINED\_20251111\_1830'
-
+   ```RUN\_DIR\_TO\_VISUALIZE \= './checkpoints/DFM\_FNCN\_RESNET18\_PRETRAINED\_20251111\_1830'```
 3. **运行**:  
-   python visualize\_rule.py
+   ```python visualize\_rule.py```
 
 4. 输出: 脚本会加载 best\_model.pth（用于获取规则）和 decoder.pth（用于绘图）。  
    最终的可视化结果 rules\_visualized\_labeled.png（带标签的剪影网格）将保存到您的运行目录中。
