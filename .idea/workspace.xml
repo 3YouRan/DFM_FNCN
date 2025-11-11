@@ -6,6 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="d3f412cb-1e95-4cce-aba7-e5c332af9816" name="更改" comment="V0.5 添加不同的特征提取器">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/visualize_rule.py" beforeDir="false" afterPath="$PROJECT_DIR$/visualize_rule.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -22,9 +23,9 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 3
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3
+}</component>
   <component name="ProjectId" id="35JRUbTyE8fhUHl3xjNdtIXTG5X" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -45,10 +46,11 @@
     "RunOnceActivity.git.unshallow": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "git-widget-placeholder": "main",
-    "settings.editor.selected.configurable": "preferences.pluginManager"
+    "last_opened_file_path": "F:/CustomOpenAiSettings.json",
+    "settings.editor.selected.configurable": "settings.codegpt.models"
   }
 }]]></component>
-  <component name="RunManager">
+  <component name="RunManager" selected="Python.train">
     <configuration name="train" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="graduation_proj" />
       <option name="ENV_FILES" value="" />
@@ -163,7 +165,23 @@
       <option name="project" value="LOCAL" />
       <updated>1762861251040</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="V0.5 添加不同的特征提取器">
+      <option name="closed" value="true" />
+      <created>1762861598284</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1762861598284</updated>
+    </task>
+    <task id="LOCAL-00008" summary="V0.5 添加不同的特征提取器">
+      <option name="closed" value="true" />
+      <created>1762861778052</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1762861778052</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
