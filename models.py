@@ -5,39 +5,88 @@ import numpy as np
 import config as cfg
 
 
-class SimpleCNN(nn.Module):
+# =========================================================================
+# 改进的特征提取器 (ResNet-like)
+# =========================================================================
+
+class BasicBlock(nn.Module):
+    """ResNet的基本残差块"""
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+
+        self.shortcut = nn.Sequential()
+        # 如果输入输出维度不一致，使用 1x1 卷积进行匹配
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * planes)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
+class ResNetFeatureExtractor(nn.Module):
     """
-    一个简单的 DCNN 特征提取器。
-    输入: [B, 1, 28, 28] (Fashion-MNIST)
-    输出: [B, N_CHANNELS, 7, 7]
+    专为 Fashion-MNIST (28x28) 设计的小型 ResNet 特征提取器。
+    它保证输出维度严格匹配 config.py 中的设置: [Batch, N_CHANNELS(32), 7, 7]
     """
 
     def __init__(self):
-        super(SimpleCNN, self).__init__()
-        # Layer 1: 28x28 -> 14x14
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
+        super(ResNetFeatureExtractor, self).__init__()
+        self.in_planes = 64
+
+        # 初始层: 1x28x28 -> 64x28x28
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+
+        # Layer 1: 保持 28x28
+        self.layer1 = self._make_layer(64, 2, stride=1)
+        # Layer 2: 下采样到 14x14
+        self.layer2 = self._make_layer(128, 2, stride=2)
+        # Layer 3: 下采样到 7x7
+        self.layer3 = self._make_layer(256, 2, stride=2)
+
+        # 最终投影层: 将 256 通道映射回我们 config 中需要的 32 通道 (cfg.N_CHANNELS)
+        self.final_conv = nn.Sequential(
+            nn.Conv2d(256 * BasicBlock.expansion, cfg.N_CHANNELS, kernel_size=1, bias=False),
+            nn.BatchNorm2d(cfg.N_CHANNELS),
+            nn.ReLU(inplace=True)
         )
-        # Layer 2: 14x14 -> 7x7
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(16, cfg.N_CHANNELS, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
+
+    def _make_layer(self, planes, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(BasicBlock(self.in_planes, planes, stride))
+            self.in_planes = planes * BasicBlock.expansion
+        return nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        return x
+        # Input: [B, 1, 28, 28]
+        out = F.relu(self.bn1(self.conv1(x)))  # -> [B, 64, 28, 28]
+        out = self.layer1(out)  # -> [B, 64, 28, 28]
+        out = self.layer2(out)  # -> [B, 128, 14, 14]
+        out = self.layer3(out)  # -> [B, 256, 7, 7]
+        out = self.final_conv(out)  # -> [B, 32, 7, 7] (匹配 cfg.N_CHANNELS 和 IMG_DIM)
+        return out
 
+
+# =========================================================================
+# DFM-FNCN 动态模糊分类层 (保持核心逻辑不变，微调稳定性)
+# =========================================================================
 
 class Dynamic_DFM_FNCN(nn.Module):
-    """
-    论文核心：支持在线动态规则生成的 DFM-FNCN 层。
-    """
-
     def __init__(self, n_channels, p_dim, n_classes, max_rules=cfg.MAX_RULES, phi_th=cfg.PHI_TH):
         super(Dynamic_DFM_FNCN, self).__init__()
         self.n_channels = n_channels
@@ -45,130 +94,104 @@ class Dynamic_DFM_FNCN(nn.Module):
         self.n_classes = n_classes
         self.max_rules = max_rules
         self.phi_th = phi_th
-
-        # 当前活跃的规则数量 (初始为0，由数据驱动增长)
         self.num_active_rules = 0
+        self.pending_rule_data = None
 
-        # 批归一化层，用于稳定输入特征图的分布
+        # 使用 InstanceNorm 而不是 BatchNorm，有时对动态变化的规则层更稳定
+        # 或者沿用 BatchNorm 但要注意它需要足够的 batch size 才能统计准确
         self.bn = nn.BatchNorm2d(n_channels)
 
-        # --- 预分配最大容量的参数空间 ---
-        # 我们使用 nn.Parameter，但实际上只有前 num_active_rules 个会被使用和更新。
-        # Centers: 规则的前件中心特征图 C_j^i
         self.centers = nn.Parameter(torch.zeros(max_rules, n_channels, p_dim))
-        # Widths: 规则的前件宽度 sigma_j^i (存储其原始值，使用 softplus 激活)
+        # 初始化宽度时，让它稍微大一点，增加初始覆盖范围，可能有助于冷启动
         self.widths_param = nn.Parameter(torch.ones(max_rules, n_channels) * cfg.INIT_SIGMA)
-        # Consequents: 规则的后件权重 (Zero-order TSK)
         self.consequents = nn.Parameter(torch.zeros(max_rules, n_classes))
 
     def forward(self, x, labels=None, training_phase=False):
-        """
-        前向传播。
-        如果 training_phase=True 且提供了 labels，则会执行在线规则生成检查。
-        """
         b = x.size(0)
-        # 1. 特征图归一化
         x = self.bn(x)
-        # 2. 展平空间维度: [B, N, 7, 7] -> [B, N, 49]
-        x_flat = x.view(b, self.n_channels, -1)
+        x_flat = x.view(b, self.n_channels, -1)  # [B, N, P]
 
-        # --- 处理初始状态 (无规则时) ---
+        # 处理初始无规则状态
         if self.num_active_rules == 0:
             if training_phase and labels is not None:
-                # 如果是训练初始阶段，强制添加第一条规则
-                self._add_rule(x_flat[0], labels[0])
+                self._add_rule_immediately(x_flat[0], labels[0])
             else:
-                # 如果是测试阶段且无规则，返回全零 (虽然这种情况在合理流程下不应发生)
-                return torch.zeros(b, self.n_classes).to(x.device)
+                # 测试时如果没规则，返回均匀分布
+                return torch.ones(b, self.n_classes).to(x.device) / self.n_classes
 
-        # --- 提取当前活跃的规则参数 ---
-        # 使用切片操作确保只计算活跃规则，梯度也只回传给它们
-        active_centers = self.centers[:self.num_active_rules]  # [R_active, N, P]
-        active_widths_param = self.widths_param[:self.num_active_rules]  # [R_active, N]
-        active_consequents = self.consequents[:self.num_active_rules]  # [R_active, n_classes]
+        # 提取活跃参数
+        active_centers = self.centers[:self.num_active_rules]
+        active_widths_param = self.widths_param[:self.num_active_rules]
+        active_consequents = self.consequents[:self.num_active_rules]
 
-        # --- 模糊化 (Fuzzification) ---
-        # x_exp: [B, 1, N, P]
-        # c_exp: [1, R_active, N, P]
-        x_exp = x_flat.unsqueeze(1)
-        c_exp = active_centers.unsqueeze(0)
+        # --- 模糊推理 ---
+        x_exp = x_flat.unsqueeze(1)  # [B, 1, N, P]
+        c_exp = active_centers.unsqueeze(0)  # [1, R, N, P]
 
-        # 计算匹配度 (Matching Degree): 余弦相似度, 沿 P 维度(dim=3)
-        M = F.cosine_similarity(x_exp, c_exp, dim=3)  # -> [B, R_active, N]
-
-        # 计算距离 d = 1 - M
+        # 计算余弦相似度 [B, R, N]
+        M = F.cosine_similarity(x_exp, c_exp, dim=3)
         d = 1.0 - M
 
-        # 计算宽度 sigma (确保为正数)
-        sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6  # -> [1, R_active, N]
+        # 计算宽度和隶属度
+        sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6
+        # 添加一个小的 epsilon 到分母防止除零风险
+        mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
 
-        # 计算高斯隶属度 mu
-        mu = torch.exp(-torch.pow(d, 2) / torch.pow(sigma, 2))  # -> [B, R_active, N]
+        # 计算激发强度 phi [B, R]
+        phi = torch.prod(mu, dim=2)
 
-        # --- 规则激发 (Firing Strength) ---
-        # 使用乘积算子聚合所有通道的隶属度
-        phi = torch.prod(mu, dim=2)  # -> [B, R_active]
-
-        # --- 在线规则生成 (Online Rule Generation) ---
-        # 仅在训练阶段进行
+        # --- 在线规则生成检查 ---
         if training_phase and labels is not None and self.num_active_rules < self.max_rules:
-            # 计算每个样本在当前所有规则下的最大激发强度
-            max_phi_per_sample, _ = phi.max(dim=1)  # [B]
+            if self.pending_rule_data is None:
+                max_phi, _ = phi.max(dim=1)
+                # 找到覆盖度最差的样本
+                min_phi_val, min_phi_idx = max_phi.min(dim=0)
+                if min_phi_val < self.phi_th:
+                    # 暂存这个最差样本用于生成新规则
+                    self.pending_rule_data = (x_flat[min_phi_idx].detach(), labels[min_phi_idx].detach())
 
-            # 找出覆盖不足的样本 (激发强度 < 阈值)
-            poorly_covered_mask = max_phi_per_sample < self.phi_th
+        # --- 去模糊化 ---
+        phi_sum = torch.sum(phi, dim=1, keepdim=True) + 1e-9
+        phi_norm = phi / phi_sum
 
-            if poorly_covered_mask.any():
-                # 选取第一个覆盖不足的样本作为新规则的种子
-                # (为了训练稳定性，每个 batch 最多只添加一条规则)
-                idx_to_add = torch.nonzero(poorly_covered_mask)[0].item()
-                self._add_rule(x_flat[idx_to_add], labels[idx_to_add])
-                # 注意：新规则在当前 batch 不会立即生效，而是在下一个 batch 生效。
-
-        # --- 去模糊化 (Defuzzification) ---
-        # 归一化激发强度
-        phi_sum = torch.sum(phi, dim=1, keepdim=True) + 1e-8
-        phi_norm = phi / phi_sum  # [B, R_active]
-
-        # 计算加权平均输出 (Logits)
-        output_logits = torch.matmul(phi_norm, active_consequents)  # [B, n_classes]
-
+        output_logits = torch.matmul(phi_norm, active_consequents)
         return output_logits
 
-    def _add_rule(self, center_feat, label):
-        """
-        内部方法：向规则库添加一条新规则。
-        """
-        # 在 no_grad 环境下初始化新参数，避免影响当前的计算图
+    def _add_rule_immediately(self, center_feat, label):
+        """仅在 num_rules=0 时调用"""
         with torch.no_grad():
-            new_idx = self.num_active_rules
-
-            # 1. 初始化中心: 使用当前样本的特征图
-            self.centers[new_idx].copy_(center_feat.detach())
-
-            # 2. 初始化宽度: 使用预设的初始值
-            # 计算 softplus 的逆，以便前向传播时 softplus(param) 等于我们想要的 INIT_SIGMA
-            init_val = np.log(np.exp(cfg.INIT_SIGMA) - 1)
-            self.widths_param[new_idx].fill_(init_val)
-
-            # 3. 初始化后件: 使用 One-hot 编码，强烈指向当前样本的真实类别
-            one_hot = torch.zeros(self.n_classes, device=self.centers.device)
-            one_hot[label] = 1.0  # 将目标类别的初始权重设为 1.0
-            self.consequents[new_idx].copy_(one_hot)
-
+            self._init_rule_at_index(0, center_feat, label)
             self.num_active_rules += 1
-            # 打印日志 (可选，用于调试规则增长过程)
-            # print(f"[Dynamic Rule] Added rule #{self.num_active_rules} for class {label.item()}")
+            print(f"--> [Init] 初始规则 #1 created for class {label.item()}")
+
+    def commit_pending_rule(self):
+        """在 optimizer.step() 后调用"""
+        if self.pending_rule_data is not None and self.num_active_rules < self.max_rules:
+            with torch.no_grad():
+                center, label = self.pending_rule_data
+                self._init_rule_at_index(self.num_active_rules, center, label)
+                self.num_active_rules += 1
+                # print(f"--> [Dynamic] 规则增加至 {self.num_active_rules} (目标类: {label.item()})")
+            self.pending_rule_data = None
+
+    def _init_rule_at_index(self, idx, center_feat, label):
+        # 1. Center: 用样本特征初始化
+        self.centers[idx].copy_(center_feat)
+        # 2. Width: 用预设值初始化
+        init_val = np.log(np.exp(cfg.INIT_SIGMA) - 1)
+        self.widths_param[idx].fill_(init_val)
+        # 3. Consequent: 强指向目标类别，其他类别给一个小负值抑制
+        # 这样 Softmax 后目标类别的概率会接近 1
+        one_hot = torch.ones(self.n_classes, device=self.centers.device) * -1.0
+        one_hot[label] = 1.0
+        self.consequents[idx].copy_(one_hot)
 
 
 class FullModel(nn.Module):
-    """
-    将特征提取器和分类器组合在一起的完整模型。
-    """
-
     def __init__(self):
         super(FullModel, self).__init__()
-        self.extractor = SimpleCNN()
+        # 使用新的强大的特征提取器
+        self.extractor = ResNetFeatureExtractor()
         self.classifier = Dynamic_DFM_FNCN(
             n_channels=cfg.N_CHANNELS,
             p_dim=cfg.P_DIM,
@@ -176,8 +199,6 @@ class FullModel(nn.Module):
         )
 
     def forward(self, x, labels=None, training_phase=False):
-        # 1. 提取特征
         features = self.extractor(x)
-        # 2. 分类 (并可能触发规则生成)
         logits = self.classifier(features, labels=labels, training_phase=training_phase)
         return logits

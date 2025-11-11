@@ -6,16 +6,14 @@ from torch.utils.data import DataLoader
 import numpy as np
 import random
 
-# 导入我们的自定义模块
 import config as cfg
 from models import FullModel
 
 
 # ==========================================
-# 工具函数
+# 工具函数 (保持不变)
 # ==========================================
 def set_seed(seed):
-    """固定随机种子以确保可复现性"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -27,19 +25,15 @@ def set_seed(seed):
 
 
 def get_data_loaders():
-    """准备 Fashion-MNIST 数据加载器"""
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))  # 归一化到 [-1, 1]
+        transforms.Normalize((0.5,), (0.5,))
     ])
-
     train_dataset = datasets.FashionMNIST(root=cfg.DATA_ROOT, train=True, download=True, transform=transform)
     test_dataset = datasets.FashionMNIST(root=cfg.DATA_ROOT, train=False, download=True, transform=transform)
-
-    train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=2)
-    # 测试集 batch_size 可以大一些，加快推理速度
-    test_loader = DataLoader(test_dataset, batch_size=1000, shuffle=False, num_workers=2)
-
+    # 根据您的硬件情况，可能需要调整 num_workers。如果报错，可以设为 0。
+    train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=0)
+    test_loader = DataLoader(test_dataset, batch_size=1000, shuffle=False, num_workers=0)
     return train_loader, test_loader
 
 
@@ -57,16 +51,20 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch):
 
         optimizer.zero_grad()
 
-        # [重要] 传入 labels 和 training_phase=True 以启用动态规则生成
+        # 前向传播 (可能会检测到需要新规则，并将其存入 pending_rule_data)
         output = model(data, labels=target, training_phase=True)
 
         loss = criterion(output, target)
         loss.backward()
 
-        # [可选] 梯度裁剪，防止新加入规则初期梯度过大导致不稳定
+        # 梯度裁剪
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optimizer.step()
+
+        # [关键修改] 在优化器更新完参数后，安全地提交新规则
+        # 此时修改参数不会影响已经完成的 backward 过程
+        model.classifier.commit_pending_rule()
 
         # 统计
         running_loss += loss.item()
@@ -88,19 +86,15 @@ def evaluate(model, test_loader, criterion):
     test_loss = 0.0
     correct = 0
     total = 0
-
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(cfg.DEVICE), target.to(cfg.DEVICE)
-            # 测试时关闭规则生成
             output = model(data, labels=target, training_phase=False)
-
             loss = criterion(output, target)
             test_loss += loss.item()
             _, predicted = output.max(1)
             total += target.size(0)
             correct += predicted.eq(target).sum().item()
-
     return test_loss / len(test_loader), 100. * correct / total
 
 
@@ -111,19 +105,13 @@ def main():
     set_seed(cfg.SEED)
     cfg.print_config()
 
-    # 1. 数据准备
     print("正在加载数据...")
     train_loader, test_loader = get_data_loaders()
 
-    # 2. 模型初始化
     model = FullModel().to(cfg.DEVICE)
-
-    # 3. 优化器和损失函数
     criterion = nn.CrossEntropyLoss()
-    # Adam 优化器会维护所有参数（包括尚未激活的规则）的状态。
     optimizer = optim.Adam(model.parameters(), lr=cfg.LR)
 
-    # 4. 训练循环
     print("\n开始训练 DFM-FNCN...")
     best_acc = 0.0
 
@@ -139,8 +127,6 @@ def main():
 
         if test_acc > best_acc:
             best_acc = test_acc
-            # 可选：保存最佳模型
-            # torch.save(model.state_dict(), 'best_dfm_fncn.pth')
 
     print(f"训练结束! 最佳测试准确率: {best_acc:.2f}%")
 
