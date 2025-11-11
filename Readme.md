@@ -116,3 +116,6 @@ pip install Pillow
 
 4. 输出: 脚本会加载 best\_model.pth（用于获取规则）和 decoder.pth（用于绘图）。  
    最终的可视化结果 rules\_visualized\_labeled.png（带标签的剪影网格）将保存到您的运行目录中。
+
+# 下一步计划
+目前模型在SVHM和Fashion-mnist上的可视化的效果不太理想，下一步计划尝试更多的数据集（如GTSRB的子集）

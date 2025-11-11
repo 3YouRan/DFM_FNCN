@@ -4,10 +4,11 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
 import config as cfg
+from torch.cuda.amp import autocast  # 导入 autocast
 
 
 # =========================================================================
-# 特征提取器 (Encoders)
+# 特征提取器 (Encoders) - 输出 (B, 128, 6, 6)
 # =========================================================================
 
 class SimpleCNN(nn.Module):
@@ -16,17 +17,16 @@ class SimpleCNN(nn.Module):
     def __init__(self):
         super(SimpleCNN, self).__init__()
         self.conv1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            nn.Conv2d(cfg.IN_CHANNELS, 16, kernel_size=3, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(2)  # 28x28 -> 14x14
         )
         self.conv2 = nn.Sequential(
-            nn.Conv2d(16, cfg.N_CHANNELS, kernel_size=3, padding=1),
-            nn.BatchNorm2d(cfg.N_CHANNELS),
+            nn.Conv2d(16, cfg.N_CHANNELS_OUT, kernel_size=3, padding=1),
+            nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
             nn.ReLU(),
-            # [关键修改] 使用 3x3 内核, 2 步长, 从 14x14 得到 6x6
-            # floor((14 - 3) / 2) + 1 = floor(5.5) + 1 = 5 + 1 = 6
+            # 使用 3x3 内核, 2 步长, 从 14x14 得到 6x6
             nn.MaxPool2d(kernel_size=3, stride=2)  # 14x14 -> 6x6
         )
 
@@ -47,7 +47,7 @@ class PretrainedResNetFeatureExtractor(nn.Module):
         except AttributeError:
             base_model = models.resnet18(pretrained=True)
 
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(cfg.IN_CHANNELS, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = base_model.bn1
         self.relu = base_model.relu
         self.maxpool = nn.Identity()
@@ -55,14 +55,13 @@ class PretrainedResNetFeatureExtractor(nn.Module):
         self.layer2 = base_model.layer2  # -> 14x14
         self.layer3 = base_model.layer3  # -> 7x7
 
-        # [关键修改] 添加一个池化层, 从 7x7 得到 6x6
-        # floor((7 - 2) / 1) + 1 = 6
+        # 添加一个池化层, 从 7x7 得到 6x6
         self.final_pool = nn.MaxPool2d(kernel_size=2, stride=1)
 
         # 投影层, (256, 6, 6) -> (128, 6, 6)
         self.final_project = nn.Sequential(
-            nn.Conv2d(256, cfg.N_CHANNELS, kernel_size=1, bias=False),
-            nn.BatchNorm2d(cfg.N_CHANNELS),
+            nn.Conv2d(256, cfg.N_CHANNELS_OUT, kernel_size=1, bias=False),
+            nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
             nn.LeakyReLU(0.1, inplace=True)
         )
 
@@ -91,18 +90,17 @@ class VGG16FeatureExtractor(nn.Module):
             base_model = models.vgg16(pretrained=True)
 
         features = list(base_model.features.children())
-        features[0] = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        features[0] = nn.Conv2d(cfg.IN_CHANNELS, 64, kernel_size=3, padding=1)
 
-        # 截断到 7x7 输出
         self.features = nn.Sequential(*features[:16])  # -> (B, 256, 7, 7)
 
-        # [关键修改] 添加一个池化层, 从 7x7 得到 6x6
+        # 添加一个池化层, 从 7x7 得到 6x6
         self.final_pool = nn.MaxPool2d(kernel_size=2, stride=1)
 
         # 投影层, (256, 6, 6) -> (128, 6, 6)
         self.final_project = nn.Sequential(
-            nn.Conv2d(256, cfg.N_CHANNELS, kernel_size=1, bias=False),
-            nn.BatchNorm2d(cfg.N_CHANNELS),
+            nn.Conv2d(256, cfg.N_CHANNELS_OUT, kernel_size=1, bias=False),
+            nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
             nn.LeakyReLU(0.1, inplace=True)
         )
 
@@ -130,7 +128,6 @@ def get_extractor():
 
 # =========================================================================
 # 模型 1: DFM-FNCN (论文复现)
-# (此部分无需更改, 它会自动读取 config.py 中的新 P_DIM=36 和 N_CHANNELS=128)
 # =========================================================================
 class Dynamic_DFM_FNCN(nn.Module):
     def __init__(self, n_channels, p_dim, n_classes, max_rules=cfg.MAX_RULES, phi_th=cfg.PHI_TH):
@@ -146,44 +143,50 @@ class Dynamic_DFM_FNCN(nn.Module):
         self.consequents = nn.Parameter(torch.zeros(max_rules, n_classes))
 
     def forward(self, x, labels=None, training_phase=False):
-        b = x.size(0)
-        x = self.bn(x)
-        # x_flat 现在的形状是 (B, 128, 36)
-        x_flat = x.view(b, self.n_channels, -1)
 
-        active_rules_count = self.num_active_rules.item()
-        if active_rules_count == 0:
-            if training_phase and labels is not None:
-                self._add_rule_immediately(x_flat[0], labels[0])
-                active_rules_count = 1
-            else:
-                return torch.zeros(b, self.n_classes).to(x.device)
+        # [AMP 修复] 强制此块在 float32/float64 下运行
+        with autocast(enabled=False):
+            # 确保输入是 float32
+            x = x.to(torch.float32)
 
-        active_centers = self.centers[:active_rules_count]
-        active_widths_param = self.widths_param[:active_rules_count]
-        active_consequents = self.consequents[:active_rules_count]
+            b = x.size(0)
+            x = self.bn(x)
+            # x_flat 现在的形状是 (B, 128, 36)
+            x_flat = x.view(b, self.n_channels, -1)
 
-        x_exp, c_exp = x_flat.unsqueeze(1), active_centers.unsqueeze(0)
-        M = F.cosine_similarity(x_exp, c_exp, dim=3)
-        d = 1.0 - M
-        sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6
-        mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
+            active_rules_count = self.num_active_rules.item()
+            if active_rules_count == 0:
+                if training_phase and labels is not None:
+                    self._add_rule_immediately(x_flat[0], labels[0])
+                    active_rules_count = 1
+                else:
+                    return torch.zeros(b, self.n_classes).to(x.device)
 
-        # 严格连乘 (64位精度)
-        # N_CHANNELS 现在是 128, 更需要 64 位精度
-        phi_double = torch.prod(mu.to(torch.float64), dim=2)
-        phi_sum_double = torch.sum(phi_double, dim=1, keepdim=True) + 1e-9
-        phi_norm_double = phi_double / phi_sum_double
+            active_centers = self.centers[:active_rules_count]
+            active_widths_param = self.widths_param[:active_rules_count]
+            active_consequents = self.consequents[:active_rules_count]
 
-        phi = phi_double.to(torch.float32)
-        if training_phase and active_rules_count < self.max_rules and self.pending_rule_data is None:
-            max_phi, _ = phi.max(dim=1)
-            min_phi_val, min_idx = max_phi.min(dim=0)
-            if min_phi_val < self.phi_th:
-                self.pending_rule_data = (x_flat[min_idx].detach(), labels[min_idx].detach())
+            x_exp, c_exp = x_flat.unsqueeze(1), active_centers.unsqueeze(0)
+            M = F.cosine_similarity(x_exp, c_exp, dim=3)
+            d = 1.0 - M
+            sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6
+            mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
 
-        output_logits = torch.matmul(phi_norm_double.to(torch.float32), active_consequents)
-        return output_logits
+            # 严格连乘 (64位精度)
+            phi_double = torch.prod(mu.to(torch.float64), dim=2)
+            phi_sum_double = torch.sum(phi_double, dim=1, keepdim=True) + 1e-9
+            phi_norm_double = phi_double / phi_sum_double
+
+            phi = phi_double.to(torch.float32)
+            if training_phase and active_rules_count < self.max_rules and self.pending_rule_data is None:
+                max_phi, _ = phi.max(dim=1)
+                min_phi_val, min_idx = max_phi.min(dim=0)
+                if min_phi_val < self.phi_th:
+                    self.pending_rule_data = (x_flat[min_idx].detach(), labels[min_idx].detach())
+
+            output_logits = torch.matmul(phi_norm_double.to(torch.float32), active_consequents)
+
+        return output_logits  # 返回 float32 logit
 
     def _add_rule_immediately(self, center_feat, label):
         with torch.no_grad():
@@ -215,18 +218,19 @@ class FullModel(nn.Module):
         super(FullModel, self).__init__()
         self.extractor = get_extractor()
         self.classifier = Dynamic_DFM_FNCN(
-            n_channels=cfg.N_CHANNELS, p_dim=cfg.P_DIM, n_classes=cfg.N_CLASSES
+            n_channels=cfg.N_CHANNELS_OUT, p_dim=cfg.P_DIM, n_classes=cfg.N_CLASSES
         )
 
     def forward(self, x, labels=None, training_phase=False):
+        # 提取器将在外部 autocast 中运行
         features = self.extractor(x)
+        # 分类器有自己的 autocast(False) 保护
         logits = self.classifier(features, labels=labels, training_phase=training_phase)
         return logits
 
 
 # =========================================================================
 # 模型 2: 传统 DCNN (用于对比)
-# (此部分无需更改, 它会自动计算 flat_features_in = 128 * 36)
 # =========================================================================
 class TraditionalCNNModel(nn.Module):
     """传统 DCNN 基线模型"""
@@ -234,7 +238,7 @@ class TraditionalCNNModel(nn.Module):
     def __init__(self):
         super(TraditionalCNNModel, self).__init__()
         self.extractor = get_extractor()
-        flat_features_in = cfg.N_CHANNELS * cfg.P_DIM
+        flat_features_in = cfg.N_CHANNELS_OUT * cfg.P_DIM
 
         layers = []
         nodes_in = flat_features_in

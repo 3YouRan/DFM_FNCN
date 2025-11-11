@@ -9,12 +9,12 @@ import sys
 
 # 导入我们的自定义模块
 import config as cfg
-from models import FullModel  # 需要 FullModel 的结构
+from models import FullModel
 # [新] 从 train_decoder 导入所有可能的解码器和工厂函数
 from train_decoder import BasicBlock, SimpleCNNDecoder, ResNet18Decoder, VGG16Decoder, get_decoder
 
 # --- [重要] 在此处配置您要可视化的运行目录 ---
-RUN_DIR_TO_VISUALIZE = './checkpoints/DFM_FNCN_RESNET18_PRETRAINED_20251111_220100'
+RUN_DIR_TO_VISUALIZE = './checkpoints/SVHN_DFM_FNCN_RESNET18_PRETRAINED_20251111_225408'
 # ---
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_VISUALIZE, 'best_model.pth')
@@ -28,36 +28,33 @@ IMG_SCALE = 100
 TEXT_HEIGHT = 35
 PADDING = 5
 
-CLASS_NAMES = ['T-shirt-top', 'Trouser', 'Pullover', 'Dress', 'Coat',
-               'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
 
+def configure_model_from_checkpoint(checkpoint):
+    """[新] 从检查点中的 'config_params' 推断配置"""
+    if 'config_params' not in checkpoint:
+        print("错误: 这是一个旧的检查点。无法推断配置。")
+        sys.exit()
 
-def configure_model_from_path(run_dir):
-    """从目录名称中推断配置"""
-    if not os.path.exists(run_dir):
-        print(f"错误: 目录不存在 '{run_dir}'")
+    params = checkpoint['config_params']
+    if params['MODEL_TYPE'] != 'DFM_FNCN':
+        print("错误: 只有 DFM_FNCN 模型可以被可视化。")
         sys.exit()
-    print(f"正在从目录名中推断配置: {run_dir}")
-    base_name = os.path.basename(run_dir)
-    if 'DFM_FNCN' not in base_name:
-        print(f"错误: {run_dir} 不是 DFM_FNCN 模型的运行目录。")
-        sys.exit()
-    cfg.MODEL_TYPE = 'DFM_FNCN'
-    if 'RESNET18_PRETRAINED' in base_name:
-        cfg.EXTRACTOR_TYPE = 'RESNET18_PRETRAINED'
-    elif 'VGG16_PRETRAINED' in base_name:
-        cfg.EXTRACTOR_TYPE = 'VGG16_PRETRAINED'
-    elif 'SIMPLE_CNN' in base_name:
-        cfg.EXTRACTOR_TYPE = 'SIMPLE_CNN'
-    else:
-        raise ValueError(f"无法从目录名中推断 EXTRACTOR_TYPE。'{base_name}'")
-    print(f"推断配置: MODEL_TYPE={cfg.MODEL_TYPE}, EXTRACTOR_TYPE={cfg.EXTRACTOR_TYPE}")
+
+    cfg.MODEL_TYPE = params['MODEL_TYPE']
+    cfg.EXTRACTOR_TYPE = params['EXTRACTOR_TYPE']
+    cfg.DATASET_NAME = params['DATASET_NAME']
+
+    config_data = cfg.DATASET_CONFIGS[cfg.DATASET_NAME]
+    cfg.N_CLASSES = config_data['n_classes']
+    cfg.IN_CHANNELS = config_data['in_channels']
+    cfg.CLASS_NAMES = config_data['class_names']
+    cfg.TARGET_SIZE = config_data['target_size']
+
+    print(f"推断配置: DATASET={cfg.DATASET_NAME}, MODEL={cfg.MODEL_TYPE}, EXTRACTOR={cfg.EXTRACTOR_TYPE}")
 
 
 def main():
     print("开始可视化带标签的模糊规则...")
-
-    configure_model_from_path(RUN_DIR_TO_VISUALIZE)
 
     if not os.path.exists(MODEL_PATH) or not os.path.exists(DECODER_PATH):
         print(f"错误: 找不到 {MODEL_PATH} 或 {DECODER_PATH}。")
@@ -68,9 +65,10 @@ def main():
 
     # 1. 加载模型
     checkpoint = torch.load(MODEL_PATH, map_location=cfg.DEVICE)
-    if 'max_rules' not in checkpoint:
-        print(f"错误: 检查点 '{MODEL_PATH}' 不包含 'max_rules'。")
-        sys.exit()
+
+    # 2. [新] 自动配置
+    configure_model_from_checkpoint(checkpoint)
+
     cfg.MAX_RULES = checkpoint['max_rules']
     print(f"从检查点加载配置: MAX_RULES = {cfg.MAX_RULES}")
 
@@ -79,13 +77,13 @@ def main():
     model.eval()
     print(f"已加载 DFM-FNCN 模型 (来自 {MODEL_PATH})")
 
-    # 2. [新] 加载正确的对称解码器
+    # 3. [新] 加载正确的对称解码器
     decoder = get_decoder().to(cfg.DEVICE)
     decoder.load_state_dict(torch.load(DECODER_PATH, map_location=cfg.DEVICE))
     decoder.eval()
     print(f"已加载对称解码器 (来自 {DECODER_PATH})")
 
-    # 3. 提取规则信息
+    # 4. 提取规则信息
     classifier = model.classifier
     num_active_rules = classifier.num_active_rules.item()
     if num_active_rules == 0:
@@ -97,9 +95,9 @@ def main():
     active_consequents = classifier.consequents.detach()[:num_active_rules]
     predicted_classes = torch.argmax(F.softmax(active_consequents, dim=1), dim=1)
 
-    # 4. 运行解码器
+    # 5. 运行解码器
     centers_reshaped = active_centers.view(
-        num_active_rules, cfg.N_CHANNELS, cfg.IMG_DIM, cfg.IMG_DIM
+        num_active_rules, cfg.N_CHANNELS_OUT, cfg.IMG_DIM_OUT, cfg.IMG_DIM_OUT
     ).to(cfg.DEVICE)
 
     with torch.no_grad():
@@ -107,7 +105,7 @@ def main():
 
     visualized_rules = (visualized_rules + 1) / 2.0
 
-    # 5. 创建带标签的图像
+    # 6. 创建带标签的图像
     labeled_tensors = []
     try:
         font = ImageFont.load_default()
@@ -118,11 +116,17 @@ def main():
     for i in range(num_active_rules):
         img_tensor = visualized_rules[i]
         pred_idx = predicted_classes[i].item()
-        class_name = CLASS_NAMES[pred_idx]
+        class_name = cfg.CLASS_NAMES[pred_idx]
 
-        pil_img = T.ToPILImage()(img_tensor)
+        # [新] 适配 3 通道图像
+        if img_tensor.shape[0] == 1:
+            pil_img = T.ToPILImage()(img_tensor)
+        else:
+            pil_img = T.ToPILImage(mode='RGB')(img_tensor)
+
         pil_img_resized = pil_img.resize((IMG_SCALE, IMG_SCALE), resample=Image.Resampling.NEAREST)
 
+        # [新] 确保画布是 RGB 以便粘贴
         canvas = Image.new('RGB', (IMG_SCALE, IMG_SCALE + TEXT_HEIGHT), 'white')
         canvas.paste(pil_img_resized, (0, 0))
 
@@ -133,7 +137,7 @@ def main():
         canvas.save(os.path.join(INDIVIDUAL_IMAGES_PATH, f"rule_{i}_({class_name}).png"))
         labeled_tensors.append(T.ToTensor()(canvas))
 
-    # 6. 保存最终的网格图
+    # 7. 保存最终的网格图
     print("正在拼接最终的网格图...")
     num_cols = int(np.ceil(np.sqrt(num_active_rules)))
     if num_cols == 0:

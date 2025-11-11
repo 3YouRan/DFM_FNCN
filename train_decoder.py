@@ -7,10 +7,12 @@ from torchvision import datasets, transforms
 import os
 import sys
 import config as cfg
-from models import FullModel  # 我们需要 FullModel 来加载编码器
+from models import FullModel
+import medmnist
+from medmnist import BloodMNIST
 
 # --- [重要] 在此处配置您要为其训练解码器的运行目录 ---
-RUN_DIR_TO_LOAD = './checkpoints/DFM_FNCN_RESNET18_PRETRAINED_20251111_223028'
+RUN_DIR_TO_LOAD = './checkpoints/SVHN_DFM_FNCN_RESNET18_PRETRAINED_20251111_225408'
 # ---
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_LOAD, 'best_model.pth')
@@ -19,35 +21,34 @@ DECODER_EPOCHS = 30
 DECODER_LR = 0.001
 
 
-def configure_model_from_path(run_dir):
-    """从目录名称中推断配置"""
-    if not os.path.exists(run_dir):
-        print(f"错误: 目录不存在 '{run_dir}'")
+def configure_model_from_checkpoint(checkpoint):
+    """[新] 从检查点中的 'config_params' 推断配置"""
+    if 'config_params' not in checkpoint:
+        print("错误: 这是一个旧的检查点。无法推断配置。")
         sys.exit()
-    print(f"正在从目录名中推断配置: {run_dir}")
-    base_name = os.path.basename(run_dir)
-    if 'DFM_FNCN' not in base_name:
-        print(f"错误: {run_dir} 不是 DFM_FNCN 模型的运行目录。")
+
+    params = checkpoint['config_params']
+    if params['MODEL_TYPE'] != 'DFM_FNCN':
+        print("错误: 解码器只能为 DFM_FNCN 模型训练。")
         sys.exit()
-    cfg.MODEL_TYPE = 'DFM_FNCN'
-    if 'RESNET18_PRETRAINED' in base_name:
-        cfg.EXTRACTOR_TYPE = 'RESNET18_PRETRAINED'
-    elif 'VGG16_PRETRAINED' in base_name:
-        cfg.EXTRACTOR_TYPE = 'VGG16_PRETRAINED'
-    elif 'SIMPLE_CNN' in base_name:
-        cfg.EXTRACTOR_TYPE = 'SIMPLE_CNN'
-    else:
-        raise ValueError(f"无法从目录名中推断 EXTRACTOR_TYPE。'{base_name}'")
-    print(f"推断配置: MODEL_TYPE={cfg.MODEL_TYPE}, EXTRACTOR_TYPE={cfg.EXTRACTOR_TYPE}")
+
+    cfg.MODEL_TYPE = params['MODEL_TYPE']
+    cfg.EXTRACTOR_TYPE = params['EXTRACTOR_TYPE']
+    cfg.DATASET_NAME = params['DATASET_NAME']
+
+    config_data = cfg.DATASET_CONFIGS[cfg.DATASET_NAME]
+    cfg.N_CLASSES = config_data['n_classes']
+    cfg.IN_CHANNELS = config_data['in_channels']
+    cfg.CLASS_NAMES = config_data['class_names']
+    cfg.TARGET_SIZE = config_data['target_size']
+
+    print(f"推断配置: DATASET={cfg.DATASET_NAME}, MODEL={cfg.MODEL_TYPE}, EXTRACTOR={cfg.EXTRACTOR_TYPE}")
 
 
 # ======================================================
 # 1. 定义对称的解码器 (Decoders)
 # ======================================================
-
 class BasicBlock(nn.Module):
-    """残差块"""
-
     def __init__(self, in_planes, planes, stride=1):
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
@@ -70,24 +71,20 @@ class BasicBlock(nn.Module):
 
 
 class SimpleCNNDecoder(nn.Module):
-    """对称于 SimpleCNN"""
-
     def __init__(self):
         super(SimpleCNNDecoder, self).__init__()
         self.bottleneck = nn.Sequential(
-            BasicBlock(cfg.N_CHANNELS, cfg.N_CHANNELS),
-            BasicBlock(cfg.N_CHANNELS, cfg.N_CHANNELS)
+            BasicBlock(cfg.N_CHANNELS_OUT, cfg.N_CHANNELS_OUT),
+            BasicBlock(cfg.N_CHANNELS_OUT, cfg.N_CHANNELS_OUT)
         )
-        # (128, 6, 6) -> (16, 14, 14)
         self.deconv1 = nn.Sequential(
-            nn.ConvTranspose2d(cfg.N_CHANNELS, 16, kernel_size=6, stride=2, padding=1),
-            # H_out = (6-1)*2 - 2*1 + 6 = 14
+            nn.ConvTranspose2d(cfg.N_CHANNELS_OUT, 16, kernel_size=6, stride=2, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True)
         )
-        # (16, 14, 14) -> (1, 28, 28)
         self.deconv2 = nn.Sequential(
-            nn.ConvTranspose2d(16, 1, kernel_size=4, stride=2, padding=1),  # H_out = (14-1)*2 - 2*1 + 4 = 28
+            # [新] 输出通道 = cfg.IN_CHANNELS
+            nn.ConvTranspose2d(16, cfg.IN_CHANNELS, kernel_size=4, stride=2, padding=1),
             nn.Tanh()
         )
 
@@ -99,34 +96,24 @@ class SimpleCNNDecoder(nn.Module):
 
 
 class ResNet18Decoder(nn.Module):
-    """对称于 ResNet18"""
-
     def __init__(self):
         super(ResNet18Decoder, self).__init__()
-        self.reverse_project = nn.Conv2d(cfg.N_CHANNELS, 256, kernel_size=1, bias=False)
+        self.reverse_project = nn.Conv2d(cfg.N_CHANNELS_OUT, 256, kernel_size=1, bias=False)
         self.bottleneck = nn.Sequential(
             BasicBlock(256, 256), BasicBlock(256, 256),
             BasicBlock(256, 256), BasicBlock(256, 256)
         )
-        # (256, 6, 6) -> (256, 7, 7)
-        self.reverse_pool = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=1)  # H_out = (6-1)*1 + 2 = 7
-        # (256, 7, 7) -> (128, 14, 14)
-        self.reverse_layer3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1,
-                                                 bias=False)  # H_out = (7-1)*2 - 2*1 + 4 = 14
+        self.reverse_pool = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=1)
+        self.reverse_layer3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
         self.bn_rev3 = nn.BatchNorm2d(128)
-
-        # [关键修复] (128, 14, 14) -> (64, 28, 28)
-        # 之前的计算是 (14-1)*2 - 2*1 + 4 = 28。这是正确的。
-        # 但为了防止浮点数或实现上的细微差异，我们显式添加 output_padding=0
-        self.reverse_layer2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, output_padding=0,
-                                                 bias=False)  # H_out=28
+        self.reverse_layer2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
         self.bn_rev2 = nn.BatchNorm2d(64)
-
         self.reverse_conv1 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 1, kernel_size=3, padding=1),
+            # [新] 输出通道 = cfg.IN_CHANNELS
+            nn.Conv2d(64, cfg.IN_CHANNELS, kernel_size=3, padding=1),
             nn.Tanh()
         )
 
@@ -141,37 +128,28 @@ class ResNet18Decoder(nn.Module):
 
 
 class VGG16Decoder(nn.Module):
-    """对称于 VGG16"""
-
     def __init__(self):
         super(VGG16Decoder, self).__init__()
-        self.reverse_project = nn.Conv2d(cfg.N_CHANNELS, 256, kernel_size=1, bias=False)
+        self.reverse_project = nn.Conv2d(cfg.N_CHANNELS_OUT, 256, kernel_size=1, bias=False)
         self.bottleneck = nn.Sequential(
             BasicBlock(256, 256), BasicBlock(256, 256),
             BasicBlock(256, 256), BasicBlock(256, 256)
         )
-        # (256, 6, 6) -> (256, 7, 7)
-        self.reverse_pool = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=1)  # H_out=7
-        # (256, 7, 7) -> (128, 7, 7)
+        self.reverse_pool = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=1)
         self.reverse_block3 = nn.Sequential(
             nn.Conv2d(256, 256, kernel_size=3, padding=1), nn.ReLU(True),
             nn.Conv2d(256, 128, kernel_size=3, padding=1), nn.ReLU(True)
         )
-        # (128, 7, 7) -> (128, 14, 14)
-        self.upsample1 = nn.ConvTranspose2d(128, 128, kernel_size=4, stride=2, padding=1)  # H_out=14
-        # (128, 14, 14) -> (64, 14, 14)
+        self.upsample1 = nn.ConvTranspose2d(128, 128, kernel_size=4, stride=2, padding=1)
         self.reverse_block2 = nn.Sequential(
             nn.Conv2d(128, 128, kernel_size=3, padding=1), nn.ReLU(True),
             nn.Conv2d(128, 64, kernel_size=3, padding=1), nn.ReLU(True)
         )
-
-        # [关键修复] (64, 14, 14) -> (64, 28, 28)
-        # H_out = (14-1)*2 - 2*1 + 4 = 28
-        self.upsample2 = nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1, output_padding=0)  # H_out=28
-
+        self.upsample2 = nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1)
         self.reverse_block1 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.ReLU(True),
-            nn.Conv2d(64, 1, kernel_size=3, padding=1),
+            # [新] 输出通道 = cfg.IN_CHANNELS
+            nn.Conv2d(64, cfg.IN_CHANNELS, kernel_size=3, padding=1),
             nn.Tanh()
         )
 
@@ -202,14 +180,11 @@ def get_decoder():
         raise ValueError(f"未知的 EXTRACTOR_TYPE: {cfg.EXTRACTOR_TYPE}")
 
 
-# ======================================================
-# 2. Autoencoder & Data Loader
-# ======================================================
 class Autoencoder(nn.Module):
     def __init__(self, encoder):
         super(Autoencoder, self).__init__()
         self.encoder = encoder
-        self.decoder = get_decoder()  # [新] 使用工厂函数
+        self.decoder = get_decoder()  # 使用工厂函数
 
     def forward(self, x):
         with torch.no_grad():
@@ -219,30 +194,46 @@ class Autoencoder(nn.Module):
 
 
 def get_train_loader():
-    transform = transforms.Compose([
+    """[新] 根据 config.py 动态加载数据集"""
+    if cfg.IN_CHANNELS == 1:
+        norm_mean, norm_std = (0.5,), (0.5,)
+    else:
+        norm_mean, norm_std = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
+
+    data_transform = transforms.Compose([
+        transforms.Resize(cfg.TARGET_SIZE),
         transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
+        transforms.Normalize(norm_mean, norm_std)
     ])
-    train_dataset = datasets.FashionMNIST(root=cfg.DATA_ROOT, train=True, download=True, transform=transform)
+
+    if cfg.DATASET_NAME == 'FASHION_MNIST':
+        train_dataset = datasets.FashionMNIST(
+            root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform
+        )
+    elif cfg.DATASET_NAME == 'SVHN':
+        train_dataset = datasets.SVHN(
+            root=cfg.DATA_ROOT, split='train', download=True, transform=data_transform
+        )
+    elif cfg.DATASET_NAME == 'BLOOD_MNIST':
+        train_dataset = BloodMNIST(
+            split='train', transform=data_transform, download=True, root=cfg.DATA_ROOT
+        )
+    else:
+        raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
+
     train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=0)
     return train_loader
 
 
-# ======================================================
-# 3. Main Training Loop (Method 2: Reconstruct Original)
-# ======================================================
 def main():
-    configure_model_from_path(RUN_DIR_TO_LOAD)
+    checkpoint = torch.load(MODEL_PATH, map_location=cfg.DEVICE)
+    configure_model_from_checkpoint(checkpoint)
 
     print(f"正在从 {MODEL_PATH} 加载预训练的编码器...")
     if not os.path.exists(MODEL_PATH):
         print(f"错误: 找不到模型文件 '{MODEL_PATH}'。")
         sys.exit()
 
-    checkpoint = torch.load(MODEL_PATH, map_location=cfg.DEVICE)
-    if 'max_rules' not in checkpoint:
-        print(f"错误: 检查点 '{MODEL_PATH}' 不包含 'max_rules'。")
-        sys.exit()
     cfg.MAX_RULES = checkpoint['max_rules']
     print(f"从检查点加载配置: MAX_RULES = {cfg.MAX_RULES}")
 
@@ -261,8 +252,9 @@ def main():
     autoencoder.train()
     for epoch in range(DECODER_EPOCHS):
         total_loss = 0
-        for batch_idx, (data, _) in enumerate(train_loader):
-            data = data.to(cfg.DEVICE)
+        for batch_idx, data_tuple in enumerate(train_loader):
+            # [新] 适配 MedMNIST 和 Torchvision
+            data = data_tuple[0].to(cfg.DEVICE)
 
             optimizer.zero_grad()
             reconstructed_images = autoencoder(data)
