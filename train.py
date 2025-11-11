@@ -7,6 +7,8 @@ import numpy as np
 import random
 import os
 import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']  # 设置中文字体
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题、
 import seaborn as sns  # 用于绘制漂亮的热图
 import torch.nn.functional as F
 
