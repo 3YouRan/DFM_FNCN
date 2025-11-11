@@ -25,12 +25,14 @@ class SimpleCNN(nn.Module):
             nn.Conv2d(16, cfg.N_CHANNELS, kernel_size=3, padding=1),
             nn.BatchNorm2d(cfg.N_CHANNELS),
             nn.ReLU(),
-            nn.MaxPool2d(2)  # 14x14 -> 7x7
+            # [关键修改] 使用 3x3 内核, 2 步长, 从 14x14 得到 6x6
+            # floor((14 - 3) / 2) + 1 = floor(5.5) + 1 = 5 + 1 = 6
+            nn.MaxPool2d(kernel_size=3, stride=2)  # 14x14 -> 6x6
         )
 
     def forward(self, x):
         x = self.conv1(x)
-        x = self.conv2(x)
+        x = self.conv2(x)  # 输出 (B, 128, 6, 6)
         return x
 
 
@@ -49,9 +51,15 @@ class PretrainedResNetFeatureExtractor(nn.Module):
         self.bn1 = base_model.bn1
         self.relu = base_model.relu
         self.maxpool = nn.Identity()
-        self.layer1 = base_model.layer1
-        self.layer2 = base_model.layer2
-        self.layer3 = base_model.layer3
+        self.layer1 = base_model.layer1  # -> 28x28
+        self.layer2 = base_model.layer2  # -> 14x14
+        self.layer3 = base_model.layer3  # -> 7x7
+
+        # [关键修改] 添加一个池化层, 从 7x7 得到 6x6
+        # floor((7 - 2) / 1) + 1 = 6
+        self.final_pool = nn.MaxPool2d(kernel_size=2, stride=1)
+
+        # 投影层, (256, 6, 6) -> (128, 6, 6)
         self.final_project = nn.Sequential(
             nn.Conv2d(256, cfg.N_CHANNELS, kernel_size=1, bias=False),
             nn.BatchNorm2d(cfg.N_CHANNELS),
@@ -65,13 +73,14 @@ class PretrainedResNetFeatureExtractor(nn.Module):
         x = self.maxpool(x)
         x = self.layer1(x)
         x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.final_project(x)
+        x = self.layer3(x)  # -> (B, 256, 7, 7)
+        x = self.final_pool(x)  # -> (B, 256, 6, 6)
+        x = self.final_project(x)  # -> (B, 128, 6, 6)
         return x
 
 
 class VGG16FeatureExtractor(nn.Module):
-    """[新] 选项 3: 'VGG16_PRETRAINED'"""
+    """选项 3: 'VGG16_PRETRAINED'"""
 
     def __init__(self):
         super(VGG16FeatureExtractor, self).__init__()
@@ -82,22 +91,15 @@ class VGG16FeatureExtractor(nn.Module):
             base_model = models.vgg16(pretrained=True)
 
         features = list(base_model.features.children())
-
-        # 1. 修改第一层以接受 1 通道输入
         features[0] = nn.Conv2d(1, 64, kernel_size=3, padding=1)
 
-        # 2. [关键修复] 截断 VGG16。
-        # VGG16 结构:
-        # ...
-        # [9]: MaxPool2d (输出 7x7)
-        # [10]-[15]: Conv layers
-        # [16]: MaxPool2d (输出 3x3) <-- 错误发生点
-        #
-        # 我们必须在第 16 层 (MaxPool2d) 之前停止，以获取 7x7 的输出。
-        self.features = nn.Sequential(*features[:16])  # 之前是 [:17]
+        # 截断到 7x7 输出
+        self.features = nn.Sequential(*features[:16])  # -> (B, 256, 7, 7)
 
-        # 3. 投影层，将 256 通道压缩到 N_CHANNELS (32)
-        # (第15层[索引14]的输出通道是 256)
+        # [关键修改] 添加一个池化层, 从 7x7 得到 6x6
+        self.final_pool = nn.MaxPool2d(kernel_size=2, stride=1)
+
+        # 投影层, (256, 6, 6) -> (128, 6, 6)
         self.final_project = nn.Sequential(
             nn.Conv2d(256, cfg.N_CHANNELS, kernel_size=1, bias=False),
             nn.BatchNorm2d(cfg.N_CHANNELS),
@@ -105,8 +107,9 @@ class VGG16FeatureExtractor(nn.Module):
         )
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.final_project(x)
+        x = self.features(x)  # -> (B, 256, 7, 7)
+        x = self.final_pool(x)  # -> (B, 256, 6, 6)
+        x = self.final_project(x)  # -> (B, 128, 6, 6)
         return x
 
 
@@ -127,6 +130,7 @@ def get_extractor():
 
 # =========================================================================
 # 模型 1: DFM-FNCN (论文复现)
+# (此部分无需更改, 它会自动读取 config.py 中的新 P_DIM=36 和 N_CHANNELS=128)
 # =========================================================================
 class Dynamic_DFM_FNCN(nn.Module):
     def __init__(self, n_channels, p_dim, n_classes, max_rules=cfg.MAX_RULES, phi_th=cfg.PHI_TH):
@@ -144,6 +148,7 @@ class Dynamic_DFM_FNCN(nn.Module):
     def forward(self, x, labels=None, training_phase=False):
         b = x.size(0)
         x = self.bn(x)
+        # x_flat 现在的形状是 (B, 128, 36)
         x_flat = x.view(b, self.n_channels, -1)
 
         active_rules_count = self.num_active_rules.item()
@@ -165,6 +170,7 @@ class Dynamic_DFM_FNCN(nn.Module):
         mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
 
         # 严格连乘 (64位精度)
+        # N_CHANNELS 现在是 128, 更需要 64 位精度
         phi_double = torch.prod(mu.to(torch.float64), dim=2)
         phi_sum_double = torch.sum(phi_double, dim=1, keepdim=True) + 1e-9
         phi_norm_double = phi_double / phi_sum_double
@@ -220,6 +226,7 @@ class FullModel(nn.Module):
 
 # =========================================================================
 # 模型 2: 传统 DCNN (用于对比)
+# (此部分无需更改, 它会自动计算 flat_features_in = 128 * 36)
 # =========================================================================
 class TraditionalCNNModel(nn.Module):
     """传统 DCNN 基线模型"""

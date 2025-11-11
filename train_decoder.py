@@ -10,12 +10,12 @@ import config as cfg
 from models import FullModel  # 我们需要 FullModel 来加载编码器
 
 # --- [重要] 在此处配置您要为其训练解码器的运行目录 ---
-RUN_DIR_TO_LOAD = './checkpoints/DFM_FNCN_VGG16_PRETRAINED_20251111_182945'
+RUN_DIR_TO_LOAD = './checkpoints/DFM_FNCN_RESNET18_PRETRAINED_20251111_223028'
 # ---
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_LOAD, 'best_model.pth')
 DECODER_SAVE_PATH = os.path.join(RUN_DIR_TO_LOAD, 'decoder.pth')
-DECODER_EPOCHS = 100  # [推荐] 这是一个更深的网络，需要更多训练
+DECODER_EPOCHS = 30
 DECODER_LR = 0.001
 
 
@@ -46,7 +46,7 @@ def configure_model_from_path(run_dir):
 # ======================================================
 
 class BasicBlock(nn.Module):
-    """[新] 论文中 Fig. 4 使用的残差块"""
+    """残差块"""
 
     def __init__(self, in_planes, planes, stride=1):
         super(BasicBlock, self).__init__()
@@ -54,7 +54,6 @@ class BasicBlock(nn.Module):
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
-
         self.shortcut = nn.Sequential()
         if stride != 1 or in_planes != planes:
             self.shortcut = nn.Sequential(
@@ -71,59 +70,58 @@ class BasicBlock(nn.Module):
 
 
 class SimpleCNNDecoder(nn.Module):
-    """对称于 SimpleCNN, 在瓶颈处添加了处理块"""
+    """对称于 SimpleCNN"""
 
     def __init__(self):
         super(SimpleCNNDecoder, self).__init__()
-
-        # [新] 瓶颈处理块
         self.bottleneck = nn.Sequential(
             BasicBlock(cfg.N_CHANNELS, cfg.N_CHANNELS),
             BasicBlock(cfg.N_CHANNELS, cfg.N_CHANNELS)
         )
-
+        # (128, 6, 6) -> (16, 14, 14)
         self.deconv1 = nn.Sequential(
-            nn.ConvTranspose2d(cfg.N_CHANNELS, 16, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(cfg.N_CHANNELS, 16, kernel_size=6, stride=2, padding=1),
+            # H_out = (6-1)*2 - 2*1 + 6 = 14
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True)
         )
+        # (16, 14, 14) -> (1, 28, 28)
         self.deconv2 = nn.Sequential(
-            nn.ConvTranspose2d(16, 1, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(16, 1, kernel_size=4, stride=2, padding=1),  # H_out = (14-1)*2 - 2*1 + 4 = 28
             nn.Tanh()
         )
 
     def forward(self, x):
-        x = self.bottleneck(x)  # [新] 先处理
+        x = self.bottleneck(x)
         x = self.deconv1(x)
         x = self.deconv2(x)
         return x
 
 
 class ResNet18Decoder(nn.Module):
-    """对称于 ResNet18, 严格遵循论文的瓶颈设计"""
+    """对称于 ResNet18"""
 
     def __init__(self):
         super(ResNet18Decoder, self).__init__()
-        # 1. 逆转 final_project: (32, 7, 7) -> (256, 7, 7)
         self.reverse_project = nn.Conv2d(cfg.N_CHANNELS, 256, kernel_size=1, bias=False)
-
-        # 2. [新] 瓶颈残差块 (模仿论文的 "Residual block x6")
         self.bottleneck = nn.Sequential(
-            BasicBlock(256, 256),
-            BasicBlock(256, 256),
-            BasicBlock(256, 256),
-            BasicBlock(256, 256)  # 6个可能太多，先用4个
+            BasicBlock(256, 256), BasicBlock(256, 256),
+            BasicBlock(256, 256), BasicBlock(256, 256)
         )
-
-        # 3. 逆转 layer3 (上采样): (256, 7, 7) -> (128, 14, 14)
-        self.reverse_layer3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
+        # (256, 6, 6) -> (256, 7, 7)
+        self.reverse_pool = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=1)  # H_out = (6-1)*1 + 2 = 7
+        # (256, 7, 7) -> (128, 14, 14)
+        self.reverse_layer3 = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1,
+                                                 bias=False)  # H_out = (7-1)*2 - 2*1 + 4 = 14
         self.bn_rev3 = nn.BatchNorm2d(128)
 
-        # 4. 逆转 layer2 (上采样): (128, 14, 14) -> (64, 28, 28)
-        self.reverse_layer2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
+        # [关键修复] (128, 14, 14) -> (64, 28, 28)
+        # 之前的计算是 (14-1)*2 - 2*1 + 4 = 28。这是正确的。
+        # 但为了防止浮点数或实现上的细微差异，我们显式添加 output_padding=0
+        self.reverse_layer2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, output_padding=0,
+                                                 bias=False)  # H_out=28
         self.bn_rev2 = nn.BatchNorm2d(64)
 
-        # 5. 逆转 layer1 和 conv1 (细化)
         self.reverse_conv1 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(64),
@@ -134,7 +132,8 @@ class ResNet18Decoder(nn.Module):
 
     def forward(self, x):
         x = self.reverse_project(x)
-        x = self.bottleneck(x)  # [新] 先处理
+        x = self.bottleneck(x)
+        x = F.relu(self.reverse_pool(x))
         x = F.relu(self.bn_rev3(self.reverse_layer3(x)))
         x = F.relu(self.bn_rev2(self.reverse_layer2(x)))
         x = self.reverse_conv1(x)
@@ -142,40 +141,34 @@ class ResNet18Decoder(nn.Module):
 
 
 class VGG16Decoder(nn.Module):
-    """对称于 VGG16, 严格遵循论文的瓶颈设计"""
+    """对称于 VGG16"""
 
     def __init__(self):
         super(VGG16Decoder, self).__init__()
-        # 1. 逆转 final_project: (32, 7, 7) -> (256, 7, 7)
         self.reverse_project = nn.Conv2d(cfg.N_CHANNELS, 256, kernel_size=1, bias=False)
-
-        # 2. [新] 瓶颈残差块
         self.bottleneck = nn.Sequential(
-            BasicBlock(256, 256),
-            BasicBlock(256, 256),
-            BasicBlock(256, 256),
-            BasicBlock(256, 256)
+            BasicBlock(256, 256), BasicBlock(256, 256),
+            BasicBlock(256, 256), BasicBlock(256, 256)
         )
-
-        # 3. 逆转 VGG 的 C-C-C 块 (细化)
+        # (256, 6, 6) -> (256, 7, 7)
+        self.reverse_pool = nn.ConvTranspose2d(256, 256, kernel_size=2, stride=1)  # H_out=7
+        # (256, 7, 7) -> (128, 7, 7)
         self.reverse_block3 = nn.Sequential(
             nn.Conv2d(256, 256, kernel_size=3, padding=1), nn.ReLU(True),
             nn.Conv2d(256, 128, kernel_size=3, padding=1), nn.ReLU(True)
         )
-
-        # 4. 逆转 Pool (上采样): (128, 7, 7) -> (128, 14, 14)
-        self.upsample1 = nn.ConvTranspose2d(128, 128, kernel_size=4, stride=2, padding=1)
-
-        # 5. 逆转 C-C 块 (细化)
+        # (128, 7, 7) -> (128, 14, 14)
+        self.upsample1 = nn.ConvTranspose2d(128, 128, kernel_size=4, stride=2, padding=1)  # H_out=14
+        # (128, 14, 14) -> (64, 14, 14)
         self.reverse_block2 = nn.Sequential(
             nn.Conv2d(128, 128, kernel_size=3, padding=1), nn.ReLU(True),
             nn.Conv2d(128, 64, kernel_size=3, padding=1), nn.ReLU(True)
         )
 
-        # 6. 逆转 Pool (上采样): (64, 14, 14) -> (64, 28, 28)
-        self.upsample2 = nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1)
+        # [关键修复] (64, 14, 14) -> (64, 28, 28)
+        # H_out = (14-1)*2 - 2*1 + 4 = 28
+        self.upsample2 = nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1, output_padding=0)  # H_out=28
 
-        # 7. 逆转 C-C 块 (细化) 和 最终输出
         self.reverse_block1 = nn.Sequential(
             nn.Conv2d(64, 64, kernel_size=3, padding=1), nn.ReLU(True),
             nn.Conv2d(64, 1, kernel_size=3, padding=1),
@@ -184,7 +177,8 @@ class VGG16Decoder(nn.Module):
 
     def forward(self, x):
         x = self.reverse_project(x)
-        x = self.bottleneck(x)  # [新] 先处理
+        x = self.bottleneck(x)
+        x = F.relu(self.reverse_pool(x))
         x = self.reverse_block3(x)
         x = F.relu(self.upsample1(x))
         x = self.reverse_block2(x)
@@ -194,7 +188,7 @@ class VGG16Decoder(nn.Module):
 
 
 def get_decoder():
-    """[新] 工厂函数：根据 config.py 返回对称的解码器"""
+    """工厂函数：根据 config.py 返回对称的解码器"""
     if cfg.EXTRACTOR_TYPE == 'RESNET18_PRETRAINED':
         print("使用解码器: ResNet18Decoder (Symmetric, with Bottleneck Blocks)")
         return ResNet18Decoder()
@@ -261,7 +255,6 @@ def main():
 
     train_loader = get_train_loader()
 
-    # [关键修改] 使用 MSELoss 来重建原始图像 (Method 2)
     optimizer = optim.Adam(autoencoder.decoder.parameters(), lr=DECODER_LR)
     criterion = nn.MSELoss()
 
@@ -274,7 +267,7 @@ def main():
             optimizer.zero_grad()
             reconstructed_images = autoencoder(data)
 
-            # [关键修改] 训练目标是原始图像 'data' (Method 2)
+            # 训练目标是原始图像 'data'
             loss = criterion(reconstructed_images, data)
 
             loss.backward()

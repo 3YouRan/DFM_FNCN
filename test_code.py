@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 # --- 1. 超参数与设置 ---
 BATCH_SIZE = 64
-EPOCHS = 5  # 为了演示快速运行，我先设为5，您可以改回10或更多
+EPOCHS = 5
 LR = 0.002  # 稍微调高了一点学习率以便更快收敛
 N_RULES = 20  # 增加一些规则数以提高容量
 N_CLASSES = 10  # Fashion-MNIST 有10个类别

@@ -14,7 +14,7 @@ from models import FullModel  # 需要 FullModel 的结构
 from train_decoder import BasicBlock, SimpleCNNDecoder, ResNet18Decoder, VGG16Decoder, get_decoder
 
 # --- [重要] 在此处配置您要可视化的运行目录 ---
-RUN_DIR_TO_VISUALIZE = './checkpoints/DFM_FNCN_VGG16_PRETRAINED_20251111_182945'
+RUN_DIR_TO_VISUALIZE = './checkpoints/DFM_FNCN_RESNET18_PRETRAINED_20251111_220100'
 # ---
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_VISUALIZE, 'best_model.pth')
