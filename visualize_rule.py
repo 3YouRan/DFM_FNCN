@@ -1,48 +1,34 @@
 import torch
-import torch.nn.functional as F
-from torchvision.utils import save_image
-import torchvision.transforms as T
-from PIL import Image, ImageDraw, ImageFont
-import os
+import torch.nn as nn
 import numpy as np
+import matplotlib.pyplot as plt
+import os
 import sys
-
-# 导入我们的自定义模块
 import config as cfg
 from models import FullModel
-# [新] 从 train_decoder 导入所有可能的解码器和工厂函数
-from train_decoder import BasicBlock, SimpleCNNDecoder, ResNet18Decoder, VGG16Decoder, get_decoder
+from train_decoder import get_decoder
+import scipy.special
 
-# --- [重要] 在此处配置您要可视化的运行目录 ---
-RUN_DIR_TO_VISUALIZE = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251203_160957'
-# ---
 
-MODEL_PATH = os.path.join(RUN_DIR_TO_VISUALIZE, 'best_model.pth')
-DECODER_PATH = os.path.join(RUN_DIR_TO_VISUALIZE, 'decoder.pth')
-OUTPUT_DIR = RUN_DIR_TO_VISUALIZE
-
-GRID_IMAGE_PATH = os.path.join(OUTPUT_DIR, 'rules_visualized_labeled.png')
-INDIVIDUAL_IMAGES_PATH = os.path.join(OUTPUT_DIR, 'rule_images_labeled')
-
-IMG_SCALE = 100
-TEXT_HEIGHT = 35
-PADDING = 5
-
+# 移除硬编码的 RUN_DIR_TO_VISUALIZE
 
 def configure_model_from_checkpoint(checkpoint):
-    """[新] 从检查点中的 'config_params' 推断配置"""
     if 'config_params' not in checkpoint:
         print("错误: 这是一个旧的检查点。无法推断配置。")
         sys.exit()
 
     params = checkpoint['config_params']
     if params['MODEL_TYPE'] != 'DFM_FNCN':
-        print("错误: 只有 DFM_FNCN 模型可以被可视化。")
+        print("错误: 只能可视化 DFM_FNCN 模型。")
         sys.exit()
 
     cfg.MODEL_TYPE = params['MODEL_TYPE']
     cfg.EXTRACTOR_TYPE = params['EXTRACTOR_TYPE']
     cfg.DATASET_NAME = params['DATASET_NAME']
+
+    # [创新点1] 恢复 Attention 配置
+    if 'USE_ATTENTION' in params:
+        cfg.USE_ATTENTION = params['USE_ATTENTION']
 
     config_data = cfg.DATASET_CONFIGS[cfg.DATASET_NAME]
     cfg.N_CLASSES = config_data['n_classes']
@@ -53,109 +39,106 @@ def configure_model_from_checkpoint(checkpoint):
     print(f"推断配置: DATASET={cfg.DATASET_NAME}, MODEL={cfg.MODEL_TYPE}, EXTRACTOR={cfg.EXTRACTOR_TYPE}")
 
 
-def main():
-    print("开始可视化带标签的模糊规则...")
+def run_visualization(run_dir):
+    """[修改] 接收 run_dir 参数供 main.py 调用"""
+    print(f"\n>>> 开始可视化规则 (Rule Visualization): {run_dir}")
 
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(DECODER_PATH):
-        print(f"错误: 找不到 {MODEL_PATH} 或 {DECODER_PATH}。")
-        print("请确保您已成功运行 train.py 和 train_decoder.py。")
+    model_path = os.path.join(run_dir, 'best_model.pth')
+    decoder_path = os.path.join(run_dir, 'decoder.pth')
+    save_path = os.path.join(run_dir, 'rules_visualized_labeled.png')
+
+    if not os.path.exists(model_path):
+        print(f"错误: 找不到模型文件 '{model_path}'")
         return
-    if not os.path.exists(INDIVIDUAL_IMAGES_PATH):
-        os.makedirs(INDIVIDUAL_IMAGES_PATH)
+    if not os.path.exists(decoder_path):
+        print(f"错误: 找不到解码器文件 '{decoder_path}'。请先运行 train_decoder.py")
+        return
 
-    # 1. 加载模型
-    checkpoint = torch.load(MODEL_PATH, map_location=cfg.DEVICE)
-
-    # 2. [新] 自动配置
+    # 1. 加载模型和配置
+    checkpoint = torch.load(model_path, map_location=cfg.DEVICE)
     configure_model_from_checkpoint(checkpoint)
-
     cfg.MAX_RULES = checkpoint['max_rules']
-    print(f"从检查点加载配置: MAX_RULES = {cfg.MAX_RULES}")
 
     model = FullModel().to(cfg.DEVICE)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    print(f"已加载 DFM-FNCN 模型 (来自 {MODEL_PATH})")
 
-    # 3. [新] 加载正确的对称解码器
+    # 2. 加载解码器
     decoder = get_decoder().to(cfg.DEVICE)
-    decoder.load_state_dict(torch.load(DECODER_PATH, map_location=cfg.DEVICE))
+    decoder.load_state_dict(torch.load(decoder_path, map_location=cfg.DEVICE))
     decoder.eval()
-    print(f"已加载对称解码器 (来自 {DECODER_PATH})")
 
-    # 4. 提取规则信息
+    # 3. 获取规则中心和后件
     classifier = model.classifier
-    num_active_rules = classifier.num_active_rules.item()
-    if num_active_rules == 0:
-        print("错误: 模型中没有激活的规则。")
+    num_rules = classifier.num_active_rules.item()
+    print(f"检测到 {num_rules} 条激活规则。")
+
+    if num_rules == 0:
+        print("没有激活的规则，无法可视化。")
         return
-    print(f"发现 {num_active_rules} 条激活的规则。")
 
-    active_centers = classifier.centers.detach()[:num_active_rules]
-    active_consequents = classifier.consequents.detach()[:num_active_rules]
-    predicted_classes = torch.argmax(F.softmax(active_consequents, dim=1), dim=1)
+    centers = classifier.centers[:num_rules].detach()  # (Rules, 128, 36)
+    consequents = classifier.consequents[:num_rules].detach().cpu().numpy()  # (Rules, Classes)
 
-    # 5. 运行解码器
-    centers_reshaped = active_centers.view(
-        num_active_rules, cfg.N_CHANNELS_OUT, cfg.IMG_DIM_OUT, cfg.IMG_DIM_OUT
-    ).to(cfg.DEVICE)
+    # 将中心 reshape 为 (Rules, 128, 6, 6) 以输入解码器
+    centers_reshaped = centers.view(num_rules, cfg.N_CHANNELS_OUT, cfg.IMG_DIM_OUT, cfg.IMG_DIM_OUT)
 
+    # 4. 解码规则中心
+    print("正在解码规则中心...")
     with torch.no_grad():
-        visualized_rules = decoder(centers_reshaped).cpu()
+        decoded_images = decoder(centers_reshaped)
 
-    visualized_rules = (visualized_rules + 1) / 2.0
+    # 反归一化图像 (假设 mean=0.5, std=0.5)
+    decoded_images = decoded_images * 0.5 + 0.5
+    decoded_images = torch.clamp(decoded_images, 0, 1)
+    decoded_images = decoded_images.cpu().numpy()
 
-    # 6. 创建带标签的图像
-    labeled_tensors = []
-    try:
-        font = ImageFont.load_default()
-    except IOError:
-        font = None
+    # 5. 确定每条规则的预测类别
+    # 使用 Softmax 找到概率最高的类
+    consequents_prob = scipy.special.softmax(consequents, axis=1)
+    predicted_classes = np.argmax(consequents_prob, axis=1)
+    confidences = np.max(consequents_prob, axis=1)
 
-    print("正在为每条规则生成带标签的图像...")
-    for i in range(num_active_rules):
-        img_tensor = visualized_rules[i]
-        pred_idx = predicted_classes[i].item()
-        class_name = cfg.CLASS_NAMES[pred_idx]
+    # 6. 绘图
+    print("正在生成可视化网格...")
+    # 计算网格尺寸
+    cols = 10
+    rows = (num_rules + cols - 1) // cols
 
-        # [新] 适配 3 通道图像
-        if img_tensor.shape[0] == 1:
-            pil_img = T.ToPILImage()(img_tensor)
+    fig, axes = plt.subplots(rows, cols, figsize=(20, 2.5 * rows))
+    axes = axes.flatten()
+
+    for i in range(num_rules):
+        ax = axes[i]
+        img = decoded_images[i]
+
+        # (C, H, W) -> (H, W, C)
+        img = np.transpose(img, (1, 2, 0))
+
+        if cfg.IN_CHANNELS == 1:
+            img = img.squeeze()
+            ax.imshow(img, cmap='gray')
         else:
-            pil_img = T.ToPILImage(mode='RGB')(img_tensor)
+            ax.imshow(img)
 
-        pil_img_resized = pil_img.resize((IMG_SCALE, IMG_SCALE), resample=Image.Resampling.NEAREST)
+        class_name = cfg.CLASS_NAMES[predicted_classes[i]]
+        ax.set_title(f"R{i}: {class_name}\nConf: {confidences[i]:.2f}", fontsize=9)
+        ax.axis('off')
 
-        # [新] 确保画布是 RGB 以便粘贴
-        canvas = Image.new('RGB', (IMG_SCALE, IMG_SCALE + TEXT_HEIGHT), 'white')
-        canvas.paste(pil_img_resized, (0, 0))
+    # 隐藏多余的子图
+    for i in range(num_rules, len(axes)):
+        axes[i].axis('off')
 
-        draw = ImageDraw.Draw(canvas)
-        draw.text((5, IMG_SCALE + 5), f"Rule: {i}", fill="black", font=font)
-        draw.text((5, IMG_SCALE + 18), f"Pred: {class_name}", fill="blue", font=font)
-
-        canvas.save(os.path.join(INDIVIDUAL_IMAGES_PATH, f"rule_{i}_({class_name}).png"))
-        labeled_tensors.append(T.ToTensor()(canvas))
-
-    # 7. 保存最终的网格图
-    print("正在拼接最终的网格图...")
-    num_cols = int(np.ceil(np.sqrt(num_active_rules)))
-    if num_cols == 0:
-        print("没有规则可供可视化。")
-        return
-
-    save_image(
-        labeled_tensors,
-        GRID_IMAGE_PATH,
-        nrow=num_cols,
-        padding=PADDING,
-        normalize=False
-    )
-
-    print("\n可视化完成!")
-    print(f"带标签的网格图已保存至: {GRID_IMAGE_PATH}")
-    print(f"带标签的单张图像已保存至: {INDIVIDUAL_IMAGES_PATH}/")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"可视化结果已保存至: {save_path}")
 
 
 if __name__ == '__main__':
-    main()
+    # 仅用于单独测试
+    TEST_DIR = './checkpoints/YOUR_RUN_DIR'
+    if os.path.exists(TEST_DIR):
+        run_visualization(TEST_DIR)
+    else:
+        print("请通过 main.py 运行或在代码中设置有效的 TEST_DIR")

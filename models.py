@@ -4,7 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
 import config as cfg
-from torch.cuda.amp import autocast
+# [修改] 使用 torch.amp.autocast
+from torch.amp import autocast
 
 
 # =========================================================================
@@ -127,8 +128,8 @@ class Dynamic_DFM_FNCN(nn.Module):
             self.register_parameter('alpha', None)
 
     def forward(self, x, labels=None, training_phase=False):
-        # 强制使用 float32/float64 避免下溢
-        with autocast(enabled=False):
+        # [修改] 强制使用 float32/float64 避免下溢，并使用 torch.amp.autocast
+        with autocast(device_type=cfg.DEVICE.type, enabled=False):
             x = x.to(torch.float32)
             b = x.size(0)
             x = self.bn(x)
@@ -194,6 +195,77 @@ class Dynamic_DFM_FNCN(nn.Module):
 
         return output_logits
 
+    def get_rule_activations(self, x):
+        """[创新点 2] 获取规则的激活强度 (Phi)，用于基于激活的修剪"""
+        with torch.no_grad():
+            x = x.to(torch.float32)
+            b = x.size(0)
+            x = self.bn(x)
+            x_flat = x.view(b, self.n_channels, -1)
+
+            active_rules_count = self.num_active_rules.item()
+            if active_rules_count == 0:
+                return None
+
+            active_centers = self.centers[:active_rules_count]
+            active_widths_param = self.widths_param[:active_rules_count]
+
+            x_exp, c_exp = x_flat.unsqueeze(1), active_centers.unsqueeze(0)
+            M = F.cosine_similarity(x_exp, c_exp, dim=3)
+            d = 1.0 - M
+            sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6
+            mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
+
+            if cfg.USE_ATTENTION and self.alpha is not None:
+                active_alpha = self.alpha[:active_rules_count]
+                att_weights = F.softmax(active_alpha, dim=1).unsqueeze(0)
+                log_mu = torch.log(mu.to(torch.float64) + 1e-9)
+                weighted_log_sum = torch.sum(att_weights.to(torch.float64) * log_mu, dim=2) * self.n_channels
+                phi_double = torch.exp(weighted_log_sum)
+            else:
+                phi_double = torch.prod(mu.to(torch.float64), dim=2)
+
+            # 返回归一化的激活强度
+            phi_sum_double = torch.sum(phi_double, dim=1, keepdim=True) + 1e-9
+            phi_norm_double = phi_double / phi_sum_double
+            return phi_norm_double.to(torch.float32)
+
+    def prune_rules(self, keep_indices):
+        """[创新点 2] 物理修剪规则，仅保留 keep_indices 中的规则"""
+        if len(keep_indices) == 0:
+            print("警告: 尝试修剪所有规则，操作已取消。")
+            return
+
+        with torch.no_grad():
+            keep_indices = torch.tensor(keep_indices, device=self.centers.device, dtype=torch.long)
+            new_count = len(keep_indices)
+
+            # 1. 提取要保留的参数
+            kept_centers = self.centers[keep_indices].clone()
+            kept_widths = self.widths_param[keep_indices].clone()
+            kept_consequents = self.consequents[keep_indices].clone()
+
+            # 2. 重置所有参数
+            self.centers.zero_()
+            self.widths_param.fill_(0)
+            self.consequents.zero_()
+
+            # 3. 填回保留的参数到前部
+            self.centers[:new_count] = kept_centers
+            self.widths_param[:new_count] = kept_widths
+            self.consequents[:new_count] = kept_consequents
+
+            # 4. 处理 Attention 参数
+            if cfg.USE_ATTENTION and self.alpha is not None:
+                kept_alpha = self.alpha[keep_indices].clone()
+                self.alpha.zero_()
+                self.alpha[:new_count] = kept_alpha
+
+            # 5. 更新计数
+            old_count = self.num_active_rules.item()
+            self.num_active_rules.fill_(new_count)
+            print(f"--> [Pruning] 规则数从 {old_count} 减少到 {new_count}。")
+
     def _add_rule_immediately(self, center_feat, label):
         with torch.no_grad():
             self._init_rule_at_index(0, center_feat, label)
@@ -215,6 +287,36 @@ class Dynamic_DFM_FNCN(nn.Module):
         new_consequent = torch.zeros(self.n_classes, device=self.centers.device)
         new_consequent[label] = 2.0
         self.consequents[idx].copy_(new_consequent)
+
+    def init_rules_from_cluster_centers(self, centers_tensor, majority_classes):
+        """
+        [创新点 3] 批量初始化规则
+        centers_tensor: (K, C, P)
+        majority_classes: list of int, length K
+        """
+        num_init = centers_tensor.size(0)
+        if num_init > self.max_rules:
+            print(f"警告: 聚类数 {num_init} 大于最大规则数 {self.max_rules}，将被截断。")
+            num_init = self.max_rules
+            centers_tensor = centers_tensor[:num_init]
+            majority_classes = majority_classes[:num_init]
+
+        with torch.no_grad():
+            # 1. 设置中心
+            self.centers[:num_init].copy_(centers_tensor)
+
+            # 2. 设置宽度 (初始化为默认值)
+            init_val = np.log(np.exp(cfg.INIT_SIGMA) - 1) if cfg.INIT_SIGMA > 1e-6 else -5.0
+            self.widths_param[:num_init].fill_(init_val)
+
+            # 3. 设置后件
+            self.consequents.zero_()  # Reset
+            for i, label in enumerate(majority_classes):
+                self.consequents[i, label] = 2.0
+
+            # 4. 更新激活规则数
+            self.num_active_rules.fill_(num_init)
+            print(f"--> [Batch Init] 已批量初始化 {num_init} 条规则。")
 
 
 class FullModel(nn.Module):
