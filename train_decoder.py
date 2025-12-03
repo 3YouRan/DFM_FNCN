@@ -12,7 +12,7 @@ import medmnist
 from medmnist import BloodMNIST
 
 # --- [重要] 在此处配置您要为其训练解码器的运行目录 ---
-RUN_DIR_TO_LOAD = './checkpoints/SVHN_DFM_FNCN_RESNET18_PRETRAINED_20251111_225408'
+RUN_DIR_TO_LOAD = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251203_160957'
 # ---
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_LOAD, 'best_model.pth')

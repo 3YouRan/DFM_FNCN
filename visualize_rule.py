@@ -14,7 +14,7 @@ from models import FullModel
 from train_decoder import BasicBlock, SimpleCNNDecoder, ResNet18Decoder, VGG16Decoder, get_decoder
 
 # --- [重要] 在此处配置您要可视化的运行目录 ---
-RUN_DIR_TO_VISUALIZE = './checkpoints/SVHN_DFM_FNCN_RESNET18_PRETRAINED_20251111_225408'
+RUN_DIR_TO_VISUALIZE = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251203_160957'
 # ---
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_VISUALIZE, 'best_model.pth')

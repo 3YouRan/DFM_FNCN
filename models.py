@@ -4,41 +4,33 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
 import config as cfg
-from torch.cuda.amp import autocast  # 导入 autocast
+from torch.cuda.amp import autocast
 
 
 # =========================================================================
-# 特征提取器 (Encoders) - 输出 (B, 128, 6, 6)
+# 特征提取器 (Encoders)
 # =========================================================================
 
 class SimpleCNN(nn.Module):
-    """选项 1: 'SIMPLE_CNN'"""
-
     def __init__(self):
         super(SimpleCNN, self).__init__()
         self.conv1 = nn.Sequential(
             nn.Conv2d(cfg.IN_CHANNELS, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(2)  # 28x28 -> 14x14
+            nn.BatchNorm2d(16), nn.ReLU(), nn.MaxPool2d(2)
         )
         self.conv2 = nn.Sequential(
             nn.Conv2d(16, cfg.N_CHANNELS_OUT, kernel_size=3, padding=1),
-            nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
-            nn.ReLU(),
-            # 使用 3x3 内核, 2 步长, 从 14x14 得到 6x6
-            nn.MaxPool2d(kernel_size=3, stride=2)  # 14x14 -> 6x6
+            nn.BatchNorm2d(cfg.N_CHANNELS_OUT), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2)
         )
 
     def forward(self, x):
         x = self.conv1(x)
-        x = self.conv2(x)  # 输出 (B, 128, 6, 6)
+        x = self.conv2(x)
         return x
 
 
 class PretrainedResNetFeatureExtractor(nn.Module):
-    """选项 2: 'RESNET18_PRETRAINED'"""
-
     def __init__(self):
         super(PretrainedResNetFeatureExtractor, self).__init__()
         try:
@@ -51,14 +43,10 @@ class PretrainedResNetFeatureExtractor(nn.Module):
         self.bn1 = base_model.bn1
         self.relu = base_model.relu
         self.maxpool = nn.Identity()
-        self.layer1 = base_model.layer1  # -> 28x28
-        self.layer2 = base_model.layer2  # -> 14x14
-        self.layer3 = base_model.layer3  # -> 7x7
-
-        # 添加一个池化层, 从 7x7 得到 6x6
+        self.layer1 = base_model.layer1
+        self.layer2 = base_model.layer2
+        self.layer3 = base_model.layer3
         self.final_pool = nn.MaxPool2d(kernel_size=2, stride=1)
-
-        # 投影层, (256, 6, 6) -> (128, 6, 6)
         self.final_project = nn.Sequential(
             nn.Conv2d(256, cfg.N_CHANNELS_OUT, kernel_size=1, bias=False),
             nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
@@ -72,15 +60,13 @@ class PretrainedResNetFeatureExtractor(nn.Module):
         x = self.maxpool(x)
         x = self.layer1(x)
         x = self.layer2(x)
-        x = self.layer3(x)  # -> (B, 256, 7, 7)
-        x = self.final_pool(x)  # -> (B, 256, 6, 6)
-        x = self.final_project(x)  # -> (B, 128, 6, 6)
+        x = self.layer3(x)
+        x = self.final_pool(x)
+        x = self.final_project(x)
         return x
 
 
 class VGG16FeatureExtractor(nn.Module):
-    """选项 3: 'VGG16_PRETRAINED'"""
-
     def __init__(self):
         super(VGG16FeatureExtractor, self).__init__()
         try:
@@ -91,13 +77,8 @@ class VGG16FeatureExtractor(nn.Module):
 
         features = list(base_model.features.children())
         features[0] = nn.Conv2d(cfg.IN_CHANNELS, 64, kernel_size=3, padding=1)
-
-        self.features = nn.Sequential(*features[:16])  # -> (B, 256, 7, 7)
-
-        # 添加一个池化层, 从 7x7 得到 6x6
+        self.features = nn.Sequential(*features[:16])
         self.final_pool = nn.MaxPool2d(kernel_size=2, stride=1)
-
-        # 投影层, (256, 6, 6) -> (128, 6, 6)
         self.final_project = nn.Sequential(
             nn.Conv2d(256, cfg.N_CHANNELS_OUT, kernel_size=1, bias=False),
             nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
@@ -105,29 +86,25 @@ class VGG16FeatureExtractor(nn.Module):
         )
 
     def forward(self, x):
-        x = self.features(x)  # -> (B, 256, 7, 7)
-        x = self.final_pool(x)  # -> (B, 256, 6, 6)
-        x = self.final_project(x)  # -> (B, 128, 6, 6)
+        x = self.features(x)
+        x = self.final_pool(x)
+        x = self.final_project(x)
         return x
 
 
 def get_extractor():
-    """工厂函数：根据 config.py 返回所需的特征提取器"""
     if cfg.EXTRACTOR_TYPE == 'RESNET18_PRETRAINED':
-        print("使用提取器: PretrainedResNetFeatureExtractor (ResNet18)")
         return PretrainedResNetFeatureExtractor()
     elif cfg.EXTRACTOR_TYPE == 'VGG16_PRETRAINED':
-        print("使用提取器: VGG16FeatureExtractor (VGG16)")
         return VGG16FeatureExtractor()
     elif cfg.EXTRACTOR_TYPE == 'SIMPLE_CNN':
-        print("使用提取器: SimpleCNN")
         return SimpleCNN()
     else:
-        raise ValueError(f"未知的 EXTRACTOR_TYPE: {cfg.EXTRACTOR_TYPE}")
+        raise ValueError(f"Unknown extractor: {cfg.EXTRACTOR_TYPE}")
 
 
 # =========================================================================
-# 模型 1: DFM-FNCN (论文复现)
+# 模型 1: DFM-FNCN (论文复现 + Attention 改进)
 # =========================================================================
 class Dynamic_DFM_FNCN(nn.Module):
     def __init__(self, n_channels, p_dim, n_classes, max_rules=cfg.MAX_RULES, phi_th=cfg.PHI_TH):
@@ -142,16 +119,19 @@ class Dynamic_DFM_FNCN(nn.Module):
         self.widths_param = nn.Parameter(torch.ones(max_rules, n_channels))
         self.consequents = nn.Parameter(torch.zeros(max_rules, n_classes))
 
+        # [创新点 1] Attention 参数
+        if cfg.USE_ATTENTION:
+            # 初始化为 0 -> Softmax 后为均匀分布 (1/N)
+            self.alpha = nn.Parameter(torch.zeros(max_rules, n_channels))
+        else:
+            self.register_parameter('alpha', None)
+
     def forward(self, x, labels=None, training_phase=False):
-
-        # [AMP 修复] 强制此块在 float32/float64 下运行
+        # 强制使用 float32/float64 避免下溢
         with autocast(enabled=False):
-            # 确保输入是 float32
             x = x.to(torch.float32)
-
             b = x.size(0)
             x = self.bn(x)
-            # x_flat 现在的形状是 (B, 128, 36)
             x_flat = x.view(b, self.n_channels, -1)
 
             active_rules_count = self.num_active_rules.item()
@@ -166,17 +146,43 @@ class Dynamic_DFM_FNCN(nn.Module):
             active_widths_param = self.widths_param[:active_rules_count]
             active_consequents = self.consequents[:active_rules_count]
 
+            # 计算隶属度 mu
             x_exp, c_exp = x_flat.unsqueeze(1), active_centers.unsqueeze(0)
             M = F.cosine_similarity(x_exp, c_exp, dim=3)
             d = 1.0 - M
             sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6
             mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
 
-            # 严格连乘 (64位精度)
-            phi_double = torch.prod(mu.to(torch.float64), dim=2)
+            # [创新点 1 修正] 聚合逻辑
+            if cfg.USE_ATTENTION and self.alpha is not None:
+                # 方案: 加权乘积 (Weighted Product)
+                # 逻辑: AND (所有重要特征必须匹配)
+
+                # 1. 获取权重 (Softmax 保证和为 1)
+                active_alpha = self.alpha[:active_rules_count]
+                att_weights = F.softmax(active_alpha, dim=1).unsqueeze(0)  # (1, Rules, Channels)
+
+                # 2. 对数空间计算
+                # log(mu^w) = w * log(mu)
+                log_mu = torch.log(mu.to(torch.float64) + 1e-9)
+
+                # 3. 加权乘积  (在对数空间)
+                # 关键: 乘以 n_channels 以保持量级与原始 Product 一致
+                # 如果不乘，结果是几何平均值 (~0.9)，会导致 PHI_TH 失效
+                weighted_log_sum = torch.sum(att_weights.to(torch.float64) * log_mu, dim=2) * self.n_channels
+
+                # 4. 转换回线性空间
+                phi_double = torch.exp(weighted_log_sum)
+
+            else:
+                # 原始连乘 (Product)
+                phi_double = torch.prod(mu.to(torch.float64), dim=2)
+
+            # 归一化激发强度
             phi_sum_double = torch.sum(phi_double, dim=1, keepdim=True) + 1e-9
             phi_norm_double = phi_double / phi_sum_double
 
+            # 动态生成规则逻辑
             phi = phi_double.to(torch.float32)
             if training_phase and active_rules_count < self.max_rules and self.pending_rule_data is None:
                 max_phi, _ = phi.max(dim=1)
@@ -186,7 +192,7 @@ class Dynamic_DFM_FNCN(nn.Module):
 
             output_logits = torch.matmul(phi_norm_double.to(torch.float32), active_consequents)
 
-        return output_logits  # 返回 float32 logit
+        return output_logits
 
     def _add_rule_immediately(self, center_feat, label):
         with torch.no_grad():
@@ -212,8 +218,6 @@ class Dynamic_DFM_FNCN(nn.Module):
 
 
 class FullModel(nn.Module):
-    """完整模型 (DFM-FNCN)"""
-
     def __init__(self):
         super(FullModel, self).__init__()
         self.extractor = get_extractor()
@@ -222,24 +226,16 @@ class FullModel(nn.Module):
         )
 
     def forward(self, x, labels=None, training_phase=False):
-        # 提取器将在外部 autocast 中运行
         features = self.extractor(x)
-        # 分类器有自己的 autocast(False) 保护
         logits = self.classifier(features, labels=labels, training_phase=training_phase)
         return logits
 
 
-# =========================================================================
-# 模型 2: 传统 DCNN (用于对比)
-# =========================================================================
 class TraditionalCNNModel(nn.Module):
-    """传统 DCNN 基线模型"""
-
     def __init__(self):
         super(TraditionalCNNModel, self).__init__()
         self.extractor = get_extractor()
         flat_features_in = cfg.N_CHANNELS_OUT * cfg.P_DIM
-
         layers = []
         nodes_in = flat_features_in
         for nodes_out in cfg.CNN_CLASSIFIER_NODES:
@@ -248,7 +244,6 @@ class TraditionalCNNModel(nn.Module):
             layers.append(nn.ReLU(inplace=True))
             layers.append(nn.Dropout(cfg.CNN_DROPOUT))
             nodes_in = nodes_out
-
         layers.append(nn.Linear(nodes_in, cfg.N_CLASSES))
         self.classifier = nn.Sequential(*layers)
 
