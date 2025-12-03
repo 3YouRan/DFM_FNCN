@@ -104,7 +104,7 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 100
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-59)
+PHI_TH = np.exp(-45)
 INIT_SIGMA = 1
 USE_ATTENTION = True
 
