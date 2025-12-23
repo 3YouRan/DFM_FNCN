@@ -4,14 +4,12 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d3f412cb-1e95-4cce-aba7-e5c332af9816" name="更改" comment="V1.0 完成整体流程，完成创新点1">
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+    <list default="true" id="d3f412cb-1e95-4cce-aba7-e5c332af9816" name="更改" comment="V1.5 完成三个创新点，并GTSRB数据集上进行了训练">
+      <change afterPath="$PROJECT_DIR$/train_decoder_gan.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/models.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train.py" beforeDir="false" afterPath="$PROJECT_DIR$/train.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train_decoder.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_decoder.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/validation.py" beforeDir="false" afterPath="$PROJECT_DIR$/validation.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/visualize_rule.py" beforeDir="false" afterPath="$PROJECT_DIR$/visualize_rule.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -47,6 +45,7 @@
     "Python.models.executor": "Run",
     "Python.train.executor": "Run",
     "Python.train_decoder.executor": "Run",
+    "Python.train_decoder_gan.executor": "Run",
     "Python.validation.executor": "Run",
     "Python.visualize_rule.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
@@ -57,7 +56,12 @@
     "settings.editor.selected.configurable": "settings.codegpt.services.custom"
   }
 }]]></component>
-  <component name="RunManager" selected="Python.main">
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\py_proj\graduation_proj\data_for_paper" />
+    </key>
+  </component>
+  <component name="RunManager">
     <configuration name="main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="graduation_proj" />
       <option name="ENV_FILES" value="" />
@@ -124,7 +128,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="validation" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="train_decoder_gan" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="graduation_proj" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -137,7 +141,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/validation.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/train_decoder_gan.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -170,11 +174,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.train_decoder_gan" />
         <item itemvalue="Python.main" />
         <item itemvalue="Python.visualize_rule" />
         <item itemvalue="Python.train_decoder" />
         <item itemvalue="Python.train" />
-        <item itemvalue="Python.validation" />
       </list>
     </recent_temporary>
   </component>
@@ -289,7 +293,23 @@
       <option name="project" value="LOCAL" />
       <updated>1764751644010</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="V1.5 完成三个创新点，并GTSRB数据集上进行了训练">
+      <option name="closed" value="true" />
+      <created>1764777501474</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1764777501474</updated>
+    </task>
+    <task id="LOCAL-00014" summary="V1.5 完成三个创新点，并GTSRB数据集上进行了训练">
+      <option name="closed" value="true" />
+      <created>1764777677563</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1764777677563</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -311,6 +331,7 @@
     <MESSAGE value="V0.5 添加不同的特征提取器" />
     <MESSAGE value="V0.6 添加对更多数据集的支持" />
     <MESSAGE value="V1.0 完成整体流程，完成创新点1" />
-    <option name="LAST_COMMIT_MESSAGE" value="V1.0 完成整体流程，完成创新点1" />
+    <MESSAGE value="V1.5 完成三个创新点，并GTSRB数据集上进行了训练" />
+    <option name="LAST_COMMIT_MESSAGE" value="V1.5 完成三个创新点，并GTSRB数据集上进行了训练" />
   </component>
 </project>

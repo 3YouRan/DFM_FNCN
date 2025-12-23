@@ -39,12 +39,16 @@ def configure_model_from_checkpoint(checkpoint):
     print(f"推断配置: DATASET={cfg.DATASET_NAME}, MODEL={cfg.MODEL_TYPE}, EXTRACTOR={cfg.EXTRACTOR_TYPE}")
 
 
-def run_visualization(run_dir):
+def run_visualization(run_dir, use_gan=False):
     """[修改] 接收 run_dir 参数供 main.py 调用"""
     print(f"\n>>> 开始可视化规则 (Rule Visualization): {run_dir}")
 
     model_path = os.path.join(run_dir, 'best_model.pth')
-    decoder_path = os.path.join(run_dir, 'decoder.pth')
+    if(use_gan):
+        decoder_path = os.path.join(run_dir, 'decoder.pth')
+    else:
+        decoder_path = os.path.join(run_dir, 'decoder_gan.pth')
+
     save_path = os.path.join(run_dir, 'rules_visualized_labeled.png')
 
     if not os.path.exists(model_path):
@@ -137,7 +141,7 @@ def run_visualization(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/YOUR_RUN_DIR'
+    TEST_DIR = './data_for_paper/GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251217_142908'
     if os.path.exists(TEST_DIR):
         run_visualization(TEST_DIR)
     else:

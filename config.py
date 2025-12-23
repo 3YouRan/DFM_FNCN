@@ -7,13 +7,13 @@ import medmnist
 # ==========================================
 # 选择要使用的数据集
 # 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB'
-DATASET_NAME = 'GTSRB'
+DATASET_NAME = 'FASHION_MNIST'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
 # 如果为列表: 仅使用列表中的类别索引 (例如 [0, 1, 2] 只训练前三类)
 # 这对于快速验证或专注于特定交通标志非常有用
-GTSRB_SUBSET_INDICES = [13, 14, 15, 17, 33, 34, 35]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
+GTSRB_SUBSET_INDICES = [12,13, 14, 15,17, 33, 34, 35,36,37,38,39,40]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
 # GTSRB_SUBSET_INDICES = None  # 示例: Stop, No Entry, Turn Right, Turn Left, Ahead Only
 
 # 选择模型架构
@@ -93,8 +93,8 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # ==========================================
 # 3. 全局训练配置
 # ==========================================
-BATCH_SIZE = 16
-EPOCHS = 15
+BATCH_SIZE = 4
+EPOCHS = 100
 LR = 0.0005
 SEED = 42
 DATA_ROOT = './data'
@@ -102,11 +102,11 @@ DATA_ROOT = './data'
 # ==========================================
 # 4. DFM-FNCN 模糊模型特定配置
 # ==========================================
-MAX_RULES = 100
+MAX_RULES = 1000
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-45)
-INIT_SIGMA = 1
-USE_ATTENTION = True
+PHI_TH = np.exp(-35)
+INIT_SIGMA = 1.05
+USE_ATTENTION = False
 
 # ==========================================
 # 5. 传统 CNN 配置
@@ -129,14 +129,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ==========================================
 # 8. [创新点 3] 基于聚类的规则初始化
 # ==========================================
-USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 7             # 初始聚类中心数量 (即初始规则数，应当与分类数一致)
-CLUSTERING_SAMPLE_LIMIT = 10000 # 用于聚类的样本数量限制 (避免内存溢出)
+USE_CLUSTERING_INIT = False  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
+N_CLUSTERS = 30             # 初始聚类中心数量
+CLUSTERING_SAMPLE_LIMIT = 60000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
 # 9. [创新点 2] 结构学习 - 规则修剪
 # ==========================================
-USE_PRUNING = True          # 是否在训练结束后自动修剪无效规则
+USE_PRUNING = False          # 是否在训练结束后自动修剪无效规则
 # 修剪方法:
 # 'CONSEQUENT': 基于后件置信度 (如果规则对任何类别的预测概率都不高，则修剪)
 # 'ACTIVATION': 基于激活强度 (如果规则在测试集上的平均激活度极低，则修剪)
@@ -145,6 +145,11 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
 PRUNING_THRESHOLD = 0.6
+# ==========================================
+# 10. [创新点 4] 注意力引导的解码器
+# ==========================================
+USE_ATTENTION_GUIDED_DECODER = False  # 是否使用注意力引导的解码器
+ATTENTION_GUIDED_DECODER_WEIGHT = 0.5  # 注意力调制强度 (0.0-1.0)
 
 def print_config():
     print("=" * 30)
@@ -154,4 +159,5 @@ def print_config():
     print(f"ATTENTION: {USE_ATTENTION} | PHI_TH: {PHI_TH:.2e}")
     print(f"CLUSTERING INIT: {USE_CLUSTERING_INIT} (K={N_CLUSTERS})")
     print(f"PRUNING: {USE_PRUNING} (Method: {PRUNING_METHOD}, Th: {PRUNING_THRESHOLD})")
+    print(f"ATTENTION GUIDED DECODER: {USE_ATTENTION_GUIDED_DECODER}")
     print("=" * 30)
