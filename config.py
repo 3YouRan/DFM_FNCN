@@ -106,7 +106,10 @@ MAX_RULES = 1000
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
 PHI_TH = np.exp(-35)
 INIT_SIGMA = 1.05
-USE_ATTENTION = False
+# ==========================================
+# [创新点 1] 结构设计创新：添加通道注意力机制
+# ==========================================
+USE_ATTENTION = True
 
 # ==========================================
 # 5. 传统 CNN 配置
@@ -127,16 +130,16 @@ P_DIM = IMG_DIM_OUT * IMG_DIM_OUT
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==========================================
-# 8. [创新点 3] 基于聚类的规则初始化
+# 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
-USE_CLUSTERING_INIT = False  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
+USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
 N_CLUSTERS = 30             # 初始聚类中心数量
 CLUSTERING_SAMPLE_LIMIT = 60000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
-# 9. [创新点 2] 结构学习 - 规则修剪
+# 9. [创新点 3] 学习算法创新 - 规则修剪
 # ==========================================
-USE_PRUNING = False          # 是否在训练结束后自动修剪无效规则
+USE_PRUNING = True          # 是否在训练结束后自动修剪无效规则
 # 修剪方法:
 # 'CONSEQUENT': 基于后件置信度 (如果规则对任何类别的预测概率都不高，则修剪)
 # 'ACTIVATION': 基于激活强度 (如果规则在测试集上的平均激活度极低，则修剪)
@@ -146,10 +149,16 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
 PRUNING_THRESHOLD = 0.6
 # ==========================================
-# 10. [创新点 4] 注意力引导的解码器
+# 10. [创新点 4] 结构设计创新：注意力引导的解码器
 # ==========================================
-USE_ATTENTION_GUIDED_DECODER = False  # 是否使用注意力引导的解码器
-ATTENTION_GUIDED_DECODER_WEIGHT = 0.5  # 注意力调制强度 (0.0-1.0)
+USE_ATTENTION_GUIDED_DECODER = True  # 是否使用注意力引导的解码器
+ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
+# ==========================================
+# 11. [创新点 5] 多尺度规则可视化(弃用)
+# ==========================================
+USE_MULTI_SCALE_VISUALIZATION = False  # 是否启用多尺度可视化
+MULTI_SCALE_LEVELS = ['coarse', 'medium', 'fine']  # 可视化尺度
+MULTI_SCALE_WEIGHTS = [0.3, 0.5, 0.2]  # 各尺度融合权重
 
 def print_config():
     print("=" * 30)
