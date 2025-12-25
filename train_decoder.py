@@ -13,7 +13,7 @@ from medmnist import BloodMNIST
 
 # 移除硬编码的 RUN_DIR_TO_LOAD
 
-DECODER_EPOCHS = 20
+DECODER_EPOCHS = 100
 DECODER_LR = 0.001
 
 
@@ -385,43 +385,8 @@ class AttentionGuidedMultiScaleDecoder(nn.Module):
         # 目标输出尺寸
         self.target_size = cfg.TARGET_SIZE
 
-    def _create_coarse_decoder(self):
-        """粗尺度解码器：关注整体形状"""
-        return nn.Sequential(
-            nn.ConvTranspose2d(cfg.N_CHANNELS_OUT, 64, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(32), nn.ReLU(inplace=True),
-            nn.Conv2d(32, cfg.IN_CHANNELS, kernel_size=3, padding=1),
-            nn.Tanh()
-        )
-
-    def _create_medium_decoder(self):
-        """中尺度解码器：关注主要特征"""
-        return nn.Sequential(
-            nn.ConvTranspose2d(cfg.N_CHANNELS_OUT, 128, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
-            nn.Conv2d(64, cfg.IN_CHANNELS, kernel_size=3, padding=1),
-            nn.Tanh()
-        )
-
-    def _create_fine_decoder(self):
-        """细尺度解码器：关注细节纹理"""
-        return nn.Sequential(
-            nn.ConvTranspose2d(cfg.N_CHANNELS_OUT, 256, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(256), nn.ReLU(inplace=True),
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
-            nn.Conv2d(64, cfg.IN_CHANNELS, kernel_size=3, padding=1),
-            nn.Tanh()
-        )
-
     def _apply_attention_modulation(self, x, attention_weights):
-        """应用注意力调制"""
+        """应用注意力调制（支持批量或单个规则）"""
         if attention_weights is not None:
             # 步骤1: 将注意力权重投影到合适的维度
             att_projected = self.attention_projection(attention_weights)
@@ -488,7 +453,6 @@ class AttentionGuidedMultiScaleDecoder(nn.Module):
         else:
             # 默认使用基础解码器
             return self.base_decoder(x)
-
 def get_decoder():
     """获取解码器，根据配置选择类型"""
     # 确定基础解码器类
@@ -572,16 +536,16 @@ def get_train_loader():
     return train_loader
 
 
-def extract_attention_weights_from_batch(model, data):
-    """从批量数据中提取注意力权重"""
+def extract_sample_specific_attention(model, data, features):
+    """
+    [改进] 为每个样本分配其最匹配规则的注意力权重
+    返回: (B, C) 每个样本使用其最匹配规则的注意力权重
+    """
     if not cfg.USE_ATTENTION or not cfg.USE_ATTENTION_GUIDED_DECODER:
         return None
 
     model.eval()
     with torch.no_grad():
-        # 获取特征
-        features = model.extractor(data)
-
         # 获取分类器中的注意力权重
         classifier = model.classifier
         num_rules = classifier.num_active_rules.item()
@@ -589,21 +553,51 @@ def extract_attention_weights_from_batch(model, data):
         if num_rules == 0 or classifier.alpha is None:
             return None
 
-        # 获取当前激活规则的注意力权重
-        active_alpha = classifier.alpha[:num_rules]
-        att_weights = F.softmax(active_alpha, dim=1)  # (Rules, Channels)
+        # 1. 获取所有规则的注意力权重 (Rules, Channels)
+        all_att_weights = F.softmax(classifier.alpha[:num_rules], dim=1)
 
-        # 对于批量数据，我们需要为每个样本分配注意力权重
-        # 这里使用平均注意力权重作为示例
-        # 在实际应用中，您可能需要更复杂的分配策略
-        avg_attention = torch.mean(att_weights, dim=0, keepdim=True)  # (1, Channels)
+        # 2. 计算每个样本与所有规则的匹配度
+        # 使用分类器的前向传播逻辑计算phi
+        b = features.size(0)
+        x = model.classifier.bn(features)
+        x_flat = x.view(b, model.classifier.n_channels, -1)
 
-        # 扩展到批量大小
-        batch_size = data.size(0)
-        batch_attention = avg_attention.expand(batch_size, -1)  # (B, Channels)
+        active_centers = classifier.centers[:num_rules]
+        active_widths_param = classifier.widths_param[:num_rules]
+
+        # 计算隶属度
+        x_exp, c_exp = x_flat.unsqueeze(1), active_centers.unsqueeze(0)
+        M = F.cosine_similarity(x_exp, c_exp, dim=3)
+        d = 1.0 - M
+        sigma = F.softplus(active_widths_param).unsqueeze(0) + 1e-6
+        mu = torch.exp(-torch.pow(d, 2) / (torch.pow(sigma, 2) + 1e-8))
+
+        # 计算激发强度phi
+        if cfg.USE_ATTENTION:
+            # 使用注意力权重计算加权乘积
+            att_weights = all_att_weights.unsqueeze(0)  # (1, Rules, Channels)
+            log_mu = torch.log(mu.to(torch.float64) + 1e-9)
+            weighted_log_sum = torch.sum(att_weights.to(torch.float64) * log_mu, dim=2) * model.classifier.n_channels
+            phi_double = torch.exp(weighted_log_sum)
+        else:
+            phi_double = torch.prod(mu.to(torch.float64), dim=2)
+
+        phi = phi_double.to(torch.float32)
+
+        # 3. 为每个样本选择最匹配的规则
+        # 找到每个样本激活最强的规则
+        best_rule_idx = torch.argmax(phi, dim=1)  # (B,)
+
+        # 4. 获取对应规则的注意力权重
+        batch_attention = all_att_weights[best_rule_idx]  # (B, Channels)
+
+        # 5. 打印匹配统计信息
+        unique_rules, counts = torch.unique(best_rule_idx, return_counts=True)
+        print(f"样本-规则匹配统计: {len(unique_rules)}条规则被匹配")
+        for rule, count in zip(unique_rules, counts):
+            print(f"  规则 {rule.item()}: {count.item()}个样本")
 
         return batch_attention
-
 
 def run_decoder_training(run_dir):
     """[修改] 接收 run_dir 参数供 main.py 调用"""
@@ -628,7 +622,7 @@ def run_decoder_training(run_dir):
     elif cfg.USE_ATTENTION_GUIDED_DECODER:
         decoder_save_path = os.path.join(run_dir, 'decoder_attention_guided.pth')
     else:
-        decoder_save_path = os.path.join(run_dir, 'decoder_multi_scale.pth')
+        decoder_save_path = os.path.join(run_dir, 'decoder.pth')
 
     if not os.path.exists(model_path):
         print(f"错误: 找不到模型文件 '{model_path}'。")
@@ -657,10 +651,14 @@ def run_decoder_training(run_dir):
         for batch_idx, data_tuple in enumerate(train_loader):
             data = data_tuple[0].to(cfg.DEVICE)
 
-            # 提取注意力权重（如果启用）
+            # 提取特征
+            with torch.no_grad():
+                features = base_model.extractor(data)
+
+            # 提取样本特定的注意力权重（如果启用）
             attention_weights = None
             if cfg.USE_ATTENTION_GUIDED_DECODER:
-                attention_weights = extract_attention_weights_from_batch(base_model, data)
+                attention_weights = extract_sample_specific_attention(base_model, data, features)
 
             optimizer.zero_grad()
 
@@ -678,7 +676,7 @@ def run_decoder_training(run_dir):
             if (batch_idx + 1) % 200 == 0:
                 loss_info = f"Loss: {loss.item():.6f}"
                 if cfg.USE_ATTENTION_GUIDED_DECODER:
-                    att_info = " (With Attention)" if attention_weights is not None else " (No Attention)"
+                    att_info = " (With Sample-Specific Attention)" if attention_weights is not None else " (No Attention)"
                     loss_info += att_info
                 print(f"[Epoch {epoch + 1}/{DECODER_EPOCHS}] Step {batch_idx + 1}/{len(train_loader)} | {loss_info}")
 
@@ -694,11 +692,13 @@ def run_decoder_training(run_dir):
         ('attention_guided' if cfg.USE_ATTENTION_GUIDED_DECODER else 'standard'),
         'use_attention': cfg.USE_ATTENTION,
         'attention_weight': cfg.ATTENTION_GUIDED_DECODER_WEIGHT if cfg.USE_ATTENTION_GUIDED_DECODER else 0.0,
-        'multi_scale_weights': cfg.MULTI_SCALE_WEIGHTS if cfg.USE_MULTI_SCALE_VISUALIZATION else None
+        'multi_scale_weights': cfg.MULTI_SCALE_WEIGHTS if cfg.USE_MULTI_SCALE_VISUALIZATION else None,
+        'attention_method': 'sample_specific'  # 新增：记录注意力方法
     }
     info_path = os.path.join(run_dir, 'decoder_info.pth')
     torch.save(decoder_info, info_path)
     print(f"解码器信息已保存至: {info_path}")
+
 if __name__ == '__main__':
     # 仅用于单独测试
     TEST_DIR = './checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
