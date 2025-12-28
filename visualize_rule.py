@@ -59,7 +59,7 @@ def get_decoder_from_config(run_dir):
     # 首先尝试加载解码器信息文件
     decoder_info_path = os.path.join(run_dir, 'decoder_info.pth')
     if os.path.exists(decoder_info_path):
-        decoder_info = torch.load(decoder_info_path, map_location=cfg.DEVICE)
+        decoder_info = torch.load(decoder_info_path, map_location=cfg.DEVICE,weights_only=False)
         print(f"加载解码器信息: {decoder_info}")
 
         # 更新配置
@@ -119,7 +119,7 @@ def get_decoder_from_config(run_dir):
 
     print(f"加载解码器: {decoder_path}")
     decoder = decoder_instance.to(cfg.DEVICE)
-    decoder.load_state_dict(torch.load(decoder_path, map_location=cfg.DEVICE))
+    decoder.load_state_dict(torch.load(decoder_path, map_location=cfg.DEVICE,weights_only=False))
     decoder.eval()
 
     return decoder
@@ -522,7 +522,7 @@ def run_visualization(run_dir):
         print(f"错误: 找不到模型文件 '{model_path}'。")
         return
 
-    checkpoint = torch.load(model_path, map_location=cfg.DEVICE)
+    checkpoint = torch.load(model_path, map_location=cfg.DEVICE,weights_only=False)
     configure_model_from_checkpoint(checkpoint)
 
     # 加载模型
@@ -561,7 +561,7 @@ def run_visualization(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
+    TEST_DIR = './checkpoints/GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251225_205947'
 
     if os.path.exists(TEST_DIR):
         run_visualization(TEST_DIR)

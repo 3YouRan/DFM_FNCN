@@ -17,11 +17,46 @@ from torch.amp import autocast, GradScaler
 import scipy.special
 # [创新点 3] 导入 KMeans
 from sklearn.cluster import KMeans
+import logging  # 新增：导入日志模块
 
 import config as cfg
 from models import FullModel, TraditionalCNNModel
 
 CLASS_NAMES = cfg.CLASS_NAMES
+
+def setup_logger(save_path):
+    """设置训练日志记录器"""
+    log_file = os.path.join(save_path, 'training_log.txt')
+
+    # 创建日志记录器
+    logger = logging.getLogger('training_logger')
+    logger.setLevel(logging.INFO)
+
+    # 清除已有的处理器（避免重复）
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # 文件处理器
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+
+    # 控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+
+    # 设置格式
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # 添加处理器
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
 
 def set_seed(seed):
     random.seed(seed)
@@ -139,15 +174,23 @@ def get_data_loaders():
 
     return train_loader, test_loader, weights
 
-def perform_clustering_initialization(model, train_loader):
+def perform_clustering_initialization(model, train_loader, logger=None):
     """[创新点 3] 使用 K-Means 聚类初始化规则中心"""
-    print(f"\n>>> 正在执行聚类初始化 (K-Means, K={cfg.N_CLUSTERS})...")
+    log_msg = f"\n>>> 正在执行聚类初始化 (K-Means, K={cfg.N_CLUSTERS})..."
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
+
     model.eval()
     features_list = []
     labels_list = []
 
     # 1. 收集特征
-    print("正在收集样本特征...")
+    log_msg = "正在收集样本特征..."
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
+
     with torch.no_grad():
         for i, data_tuple in enumerate(train_loader):
             if i * cfg.BATCH_SIZE > cfg.CLUSTERING_SAMPLE_LIMIT:
@@ -166,10 +209,17 @@ def perform_clustering_initialization(model, train_loader):
     all_features = np.concatenate(features_list, axis=0)
     all_labels = np.concatenate(labels_list, axis=0)
 
-    print(f"收集了 {all_features.shape[0]} 个样本用于聚类。")
+    log_msg = f"收集了 {all_features.shape[0]} 个样本用于聚类。"
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
 
     # 2. 执行聚类
-    print("正在运行 K-Means...")
+    log_msg = "正在运行 K-Means..."
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
+
     kmeans = KMeans(n_clusters=cfg.N_CLUSTERS, n_init=10, random_state=cfg.SEED)
     cluster_labels = kmeans.fit_predict(all_features)
     cluster_centers = kmeans.cluster_centers_  # (K, Feature_Dim)
@@ -194,17 +244,28 @@ def perform_clustering_initialization(model, train_loader):
     cluster_centers_reshaped = cluster_centers_tensor.view(cfg.N_CLUSTERS, cfg.N_CHANNELS_OUT, cfg.P_DIM)
 
     model.classifier.init_rules_from_cluster_centers(cluster_centers_reshaped, cluster_majority_classes)
-    print("聚类初始化完成。\n")
 
-def perform_rule_pruning(model, test_loader):
+    log_msg = "聚类初始化完成。\n"
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
+
+def perform_rule_pruning(model, test_loader, logger=None):
     """[创新点 2] 执行规则修剪"""
-    print(f"\n>>> 正在执行规则修剪 (Method: {cfg.PRUNING_METHOD}, Th: {cfg.PRUNING_THRESHOLD})...")
+    log_msg = f"\n>>> 正在执行规则修剪 (Method: {cfg.PRUNING_METHOD}, Th: {cfg.PRUNING_THRESHOLD})..."
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
+
     model.eval()
     classifier = model.classifier
     num_rules = classifier.num_active_rules.item()
 
     if num_rules == 0:
-        print("没有激活的规则，跳过修剪。")
+        log_msg = "没有激活的规则，跳过修剪。"
+        print(log_msg)
+        if logger:
+            logger.info(log_msg)
         return
 
     keep_indices = []
@@ -218,10 +279,17 @@ def perform_rule_pruning(model, test_loader):
             if max_probs[i] >= cfg.PRUNING_THRESHOLD:
                 keep_indices.append(i)
             else:
-                print(f"    [Prune] Rule {i} dropped (Max Prob: {max_probs[i]:.4f} < {cfg.PRUNING_THRESHOLD})")
+                prune_msg = f"    [Prune] Rule {i} dropped (Max Prob: {max_probs[i]:.4f} < {cfg.PRUNING_THRESHOLD})"
+                print(prune_msg)
+                if logger:
+                    logger.info(prune_msg)
 
     elif cfg.PRUNING_METHOD == 'ACTIVATION':
-        print("正在计算测试集上的规则激活度...")
+        log_msg = "正在计算测试集上的规则激活度..."
+        print(log_msg)
+        if logger:
+            logger.info(log_msg)
+
         total_activations = torch.zeros(num_rules, device=cfg.DEVICE)
         total_samples = 0
 
@@ -240,20 +308,56 @@ def perform_rule_pruning(model, test_loader):
             if avg_activations[i] >= cfg.PRUNING_THRESHOLD:
                 keep_indices.append(i)
             else:
-                print(f"    [Prune] Rule {i} dropped (Avg Act: {avg_activations[i]:.5f} < {cfg.PRUNING_THRESHOLD})")
+                prune_msg = f"    [Prune] Rule {i} dropped (Avg Act: {avg_activations[i]:.5f} < {cfg.PRUNING_THRESHOLD})"
+                print(prune_msg)
+                if logger:
+                    logger.info(prune_msg)
 
     else:
-        print(f"未知的修剪方法: {cfg.PRUNING_METHOD}")
+        log_msg = f"未知的修剪方法: {cfg.PRUNING_METHOD}"
+        print(log_msg)
+        if logger:
+            logger.warning(log_msg)
         return
 
     if len(keep_indices) < num_rules:
         classifier.prune_rules(keep_indices)
+        log_msg = f"规则修剪完成，从 {num_rules} 条规则修剪到 {len(keep_indices)} 条。\n"
     else:
-        print("没有规则被修剪。")
-    print("规则修剪完成。\n")
+        log_msg = "没有规则被修剪。\n"
 
+    print(log_msg)
+    if logger:
+        logger.info(log_msg)
 
-def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler):
+def perform_rule_merging(model, test_loader, epoch=None, logger=None):
+    """[创新点 6] 执行规则融合"""
+    if not cfg.USE_RULE_MERGING:
+        return 0, []
+
+    # 检查融合时机
+    if cfg.MERGING_TIMING == 'EVERY_EPOCH' and epoch is not None:
+        # 每个epoch结束后融合
+        log_msg = f"\n>>> Epoch {epoch+1} 结束后执行规则融合..."
+        print(log_msg)
+        if logger:
+            logger.info(log_msg)
+
+        merged_count, merge_pairs = model.classifier.merge_similar_rules(test_loader)
+        return merged_count, merge_pairs
+    elif cfg.MERGING_TIMING == 'FINAL_ONLY' and epoch is None:
+        # 只在训练结束时融合
+        log_msg = f"\n>>> 训练结束后执行规则融合..."
+        print(log_msg)
+        if logger:
+            logger.info(log_msg)
+
+        merged_count, merge_pairs = model.classifier.merge_similar_rules(test_loader)
+        return merged_count, merge_pairs
+    else:
+        return 0, []
+
+def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, logger=None):
     model.train()
     running_loss, correct, total = 0.0, 0, 0
 
@@ -287,10 +391,15 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler):
             if cfg.MODEL_TYPE == 'DFM_FNCN':
                 log_msg += f" | Active Rules: {model.classifier.num_active_rules.item()}"
             print(log_msg)
+            if logger:
+                logger.info(log_msg)
 
-    return running_loss / len(train_loader), 100. * correct / total
+    avg_loss = running_loss / len(train_loader)
+    avg_acc = 100. * correct / total
 
-def evaluate(model, test_loader, criterion):
+    return avg_loss, avg_acc
+
+def evaluate(model, test_loader, criterion, logger=None):
     model.eval()
     test_loss, correct, total = 0.0, 0, 0
     with torch.no_grad():
@@ -309,7 +418,11 @@ def evaluate(model, test_loader, criterion):
             _, predicted = output.max(1)
             total += target.size(0)
             correct += predicted.eq(target).sum().item()
-    return test_loss / len(test_loader), 100. * correct / total
+
+    avg_loss = test_loss / len(test_loader)
+    avg_acc = 100. * correct / total
+
+    return avg_loss, avg_acc
 
 def plot_history(history, save_path):
     plt.figure(figsize=(12, 5))
@@ -362,6 +475,36 @@ def visualize_attention_weights(model, save_path):
     plt.savefig(os.path.join(save_path, 'fuzzy_rules_attention.png'))
     plt.close()
 
+def visualize_rule_merging_history(merging_history, save_path):
+    """[创新点 6] 可视化规则融合历史"""
+    if not merging_history:
+        return
+
+    epochs = [entry['epoch'] for entry in merging_history]
+    merged_counts = [entry['merged_count'] for entry in merging_history]
+    rule_counts = [entry['rule_count'] for entry in merging_history]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # 融合数量图
+    axes[0].plot(epochs, merged_counts, 'b-o', linewidth=2, markersize=8)
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Merged Rules Count')
+    axes[0].set_title('Rule Merging History')
+    axes[0].grid(True, alpha=0.3)
+
+    # 规则数量变化图
+    axes[1].plot(epochs, rule_counts, 'r-s', linewidth=2, markersize=8)
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('Active Rules Count')
+    axes[1].set_title('Active Rules Count History')
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_path, 'rule_merging_history.png'))
+    plt.close()
+    print(f"规则融合历史图已保存至: {os.path.join(save_path, 'rule_merging_history.png')}")
+
 def save_hyperparameters(save_path):
     """[新增] 保存超参数到 txt 文件"""
     hp_file = os.path.join(save_path, 'hyperparameters.txt')
@@ -404,6 +547,13 @@ def save_hyperparameters(save_path):
         f.write(f"PRUNING_METHOD: {cfg.PRUNING_METHOD}\n")
         f.write(f"PRUNING_THRESHOLD: {cfg.PRUNING_THRESHOLD}\n")
 
+        f.write("\n[Rule Merging Config]\n")
+        f.write(f"USE_RULE_MERGING: {cfg.USE_RULE_MERGING}\n")
+        f.write(f"MERGING_METHOD: {cfg.MERGING_METHOD}\n")
+        f.write(f"MERGING_THRESHOLD: {cfg.MERGING_THRESHOLD}\n")
+        f.write(f"MERGING_STRATEGY: {cfg.MERGING_STRATEGY}\n")
+        f.write(f"MERGING_TIMING: {cfg.MERGING_TIMING}\n")
+
     print(f"超参数已保存至: {hp_file}")
 
 def run_training():
@@ -415,11 +565,37 @@ def run_training():
     if not os.path.exists(SAVE_PATH): os.makedirs(SAVE_PATH)
     print(f"所有结果将保存到: {SAVE_PATH}")
 
+    # [新增] 设置日志记录器
+    logger = setup_logger(SAVE_PATH)
+    logger.info("=" * 60)
+    logger.info(f"开始训练: {run_name}")
+    logger.info(f"保存路径: {SAVE_PATH}")
+    logger.info(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 60)
+
+    # 记录配置信息
+    logger.info(f"数据集: {cfg.DATASET_NAME}")
+    logger.info(f"模型类型: {cfg.MODEL_TYPE}")
+    logger.info(f"特征提取器: {cfg.EXTRACTOR_TYPE}")
+    logger.info(f"批次大小: {cfg.BATCH_SIZE}")
+    logger.info(f"训练轮数: {cfg.EPOCHS}")
+    logger.info(f"学习率: {cfg.LR}")
+    logger.info(f"随机种子: {cfg.SEED}")
+    if cfg.DATASET_NAME == 'GTSRB' and cfg.GTSRB_SUBSET_INDICES is not None:
+        logger.info(f"GTSRB子集: {cfg.GTSRB_SUBSET_INDICES}")
+    logger.info(f"注意力机制: {cfg.USE_ATTENTION}")
+    logger.info(f"聚类初始化: {cfg.USE_CLUSTERING_INIT}")
+    logger.info(f"规则修剪: {cfg.USE_PRUNING}")
+    logger.info(f"规则融合: {cfg.USE_RULE_MERGING}")
+
     # [新增] 保存超参数
     save_hyperparameters(SAVE_PATH)
 
     # [修改] 获取数据加载器和类别权重
     train_loader, test_loader, class_weights = get_data_loaders()
+    logger.info(f"训练集大小: {len(train_loader.dataset)}")
+    logger.info(f"测试集大小: {len(test_loader.dataset)}")
+    logger.info(f"类别权重: {class_weights.tolist()}")
 
     if cfg.MODEL_TYPE == 'DFM_FNCN': model = FullModel().to(cfg.DEVICE)
     elif cfg.MODEL_TYPE == 'TRADITIONAL_CNN': model = TraditionalCNNModel().to(cfg.DEVICE)
@@ -427,12 +603,12 @@ def run_training():
 
     # [创新点 3] 执行聚类初始化
     if cfg.MODEL_TYPE == 'DFM_FNCN' and cfg.USE_CLUSTERING_INIT:
-        perform_clustering_initialization(model, train_loader)
-        print(f"提示: 已启用聚类初始化。动态规则生成保持开启 (PHI_TH = {cfg.PHI_TH:.2e})。")
+        perform_clustering_initialization(model, train_loader, logger)
+        logger.info(f"提示: 已启用聚类初始化。动态规则生成保持开启 (PHI_TH = {cfg.PHI_TH:.2e})。")
 
     # [修改] 使用加权 CrossEntropyLoss 解决类别不平衡
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(cfg.DEVICE))
-    print("已应用类别权重 (Class Weights) 以解决样本不平衡问题。")
+    logger.info("已应用类别权重 (Class Weights) 以解决样本不平衡问题。")
 
     optimizer = optim.Adam(model.parameters(), lr=cfg.LR)
     scaler = GradScaler(device='cuda', enabled=(cfg.DEVICE.type == 'cuda'))
@@ -441,15 +617,24 @@ def run_training():
     best_acc = 0.0
     best_model_save_path = os.path.join(SAVE_PATH, 'best_model.pth')
 
-    print(f"\n开始训练 {cfg.MODEL_TYPE}...")
+    # [创新点 6] 记录规则融合历史
+    merging_history = []
+
+    logger.info(f"\n开始训练 {cfg.MODEL_TYPE}...")
+    logger.info(f"训练开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     for epoch in range(cfg.EPOCHS):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler)
-        test_loss, test_acc = evaluate(model, test_loader, criterion)
+        epoch_start_time = datetime.now()
+
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, logger)
+        test_loss, test_acc = evaluate(model, test_loader, criterion, logger)
 
         history['train_loss'].append(train_loss); history['train_acc'].append(train_acc)
         history['test_loss'].append(test_loss); history['test_acc'].append(test_acc)
 
-        print(f"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Acc {train_acc:.2f}% | Test Loss {test_loss:.4f}, Acc {test_acc:.2f}%")
+        epoch_log = f"Epoch {epoch+1}: Train Loss {train_loss:.4f}, Acc {train_acc:.2f}% | Test Loss {test_loss:.4f}, Acc {test_acc:.2f}%"
+        print(epoch_log)
+        logger.info(epoch_log)
 
         if test_acc > best_acc:
             best_acc = test_acc
@@ -460,21 +645,58 @@ def run_training():
                     'MODEL_TYPE': cfg.MODEL_TYPE,
                     'EXTRACTOR_TYPE': cfg.EXTRACTOR_TYPE,
                     'DATASET_NAME': cfg.DATASET_NAME,
-                    'USE_ATTENTION': cfg.USE_ATTENTION
+                    'USE_ATTENTION': cfg.USE_ATTENTION,
+                    'USE_CLUSTERING_INIT': cfg.USE_CLUSTERING_INIT,
+                    'USE_PRUNING': cfg.USE_PRUNING,
+                    'USE_RULE_MERGING': cfg.USE_RULE_MERGING,
+                    'GTSRB_SUBSET_INDICES': cfg.GTSRB_SUBSET_INDICES,
+                    'INIT_SIGMA': cfg.INIT_SIGMA,
+                    'PHI_TH': cfg.PHI_TH
                 }
             }, best_model_save_path)
-            print(f"    *** 新最佳权重 (Acc: {best_acc:.2f}%) ***")
+            best_msg = f"    *** 新最佳权重 (Acc: {best_acc:.2f}%) ***"
+            print(best_msg)
+            logger.info(best_msg)
 
         if cfg.MODEL_TYPE == 'DFM_FNCN':
-            print(f"    Active Rules: {model.classifier.num_active_rules.item()}/{cfg.MAX_RULES}")
+            active_rules = model.classifier.num_active_rules.item()
+            rules_msg = f"    Active Rules: {active_rules}/{cfg.MAX_RULES}"
+            print(rules_msg)
+            logger.info(rules_msg)
+
+            # [创新点 6] 执行规则融合（如果配置为每个epoch后融合）
+            if cfg.USE_RULE_MERGING and cfg.MERGING_TIMING == 'EVERY_EPOCH':
+                merged_count, merge_pairs = perform_rule_merging(model, test_loader, epoch, logger)
+                if merged_count > 0:
+                    merging_history.append({
+                        'epoch': epoch + 1,
+                        'merged_count': merged_count,
+                        'merge_pairs': merge_pairs,
+                        'rule_count': model.classifier.num_active_rules.item()
+                    })
+                    merge_msg = f"    [Merging] 融合了 {merged_count} 对规则，当前规则数: {model.classifier.num_active_rules.item()}"
+                    logger.info(merge_msg)
+
+        epoch_end_time = datetime.now()
+        epoch_duration = (epoch_end_time - epoch_start_time).total_seconds()
+        logger.info(f"Epoch {epoch+1} 完成，耗时: {epoch_duration:.2f}秒")
+
+    # 记录最终训练结果
+    final_msg = f"\n训练完成! 最佳测试准确率: {best_acc:.2f}%"
+    print(final_msg)
+    logger.info(final_msg)
+    logger.info(f"训练历史 - 最终训练准确率: {history['train_acc'][-1]:.2f}%")
+    logger.info(f"训练历史 - 最终测试准确率: {history['test_acc'][-1]:.2f}%")
+    logger.info(f"训练结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"总训练时间: {(datetime.now() - datetime.strptime(timestamp, '%Y%m%d_%H%M%S')).total_seconds():.2f}秒")
 
     # [创新点 2] 训练结束后执行规则修剪
     if cfg.MODEL_TYPE == 'DFM_FNCN' and cfg.USE_PRUNING:
-        print("\n>>> 训练结束，开始执行规则修剪...")
-        checkpoint = torch.load(best_model_save_path)
+        logger.info("\n>>> 训练结束，开始执行规则修剪...")
+        checkpoint = torch.load(best_model_save_path,weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
 
-        perform_rule_pruning(model, test_loader)
+        perform_rule_pruning(model, test_loader, logger)
 
         pruned_model_save_path = os.path.join(SAVE_PATH, 'best_model_pruned.pth')
         torch.save({
@@ -482,23 +704,91 @@ def run_training():
             'max_rules': cfg.MAX_RULES,
             'config_params': checkpoint['config_params']
         }, pruned_model_save_path)
-        print(f"修剪后的模型已保存至: {pruned_model_save_path}")
+        logger.info(f"修剪后的模型已保存至: {pruned_model_save_path}")
 
-        pruned_loss, pruned_acc = evaluate(model, test_loader, criterion)
-        print(f"修剪后性能: Loss {pruned_loss:.4f}, Acc {pruned_acc:.2f}%")
+        pruned_loss, pruned_acc = evaluate(model, test_loader, criterion, logger)
+        prune_result = f"修剪后性能: Loss {pruned_loss:.4f}, Acc {pruned_acc:.2f}%"
+        print(prune_result)
+        logger.info(prune_result)
 
         torch.save({
             'model_state_dict': model.state_dict(),
             'max_rules': cfg.MAX_RULES,
             'config_params': checkpoint['config_params']
         }, best_model_save_path)
-        print("已更新最佳模型文件为修剪后版本。")
+        logger.info("已更新最佳模型文件为修剪后版本。")
 
-    print(f"训练结束! 最佳测试准确率: {best_acc:.2f}%")
+    # [创新点 6] 训练结束后执行规则融合（如果配置为只在训练结束时融合）
+    if cfg.MODEL_TYPE == 'DFM_FNCN' and cfg.USE_RULE_MERGING and cfg.MERGING_TIMING == 'FINAL_ONLY':
+        logger.info("\n>>> 训练结束，开始执行规则融合...")
+        merged_count, merge_pairs = perform_rule_merging(model, test_loader, logger=logger)
+        if merged_count > 0:
+            merging_history.append({
+                'epoch': cfg.EPOCHS,
+                'merged_count': merged_count,
+                'merge_pairs': merge_pairs,
+                'rule_count': model.classifier.num_active_rules.item()
+            })
+
+            # 保存融合后的模型
+            merged_model_save_path = os.path.join(SAVE_PATH, 'best_model_merged.pth')
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'max_rules': cfg.MAX_RULES,
+                'config_params': checkpoint['config_params']
+            }, merged_model_save_path)
+            logger.info(f"融合后的模型已保存至: {merged_model_save_path}")
+
+            merged_loss, merged_acc = evaluate(model, test_loader, criterion, logger)
+            merge_result = f"融合后性能: Loss {merged_loss:.4f}, Acc {merged_acc:.2f}%"
+            print(merge_result)
+            logger.info(merge_result)
+
+    # 保存训练历史图表
+    logger.info("\n>>> 正在生成训练历史图表...")
     plot_history(history, SAVE_PATH)
+    logger.info(f"训练历史图表已保存至: {os.path.join(SAVE_PATH, 'training_history.png')}")
+
+    # 如果是 DFM_FNCN 模型，生成规则可视化
     if cfg.MODEL_TYPE == 'DFM_FNCN':
+        logger.info("\n>>> 正在生成规则可视化...")
         visualize_and_save_rules(model, SAVE_PATH, cfg.CLASS_NAMES)
+        logger.info(f"规则后件热图已保存至: {os.path.join(SAVE_PATH, 'fuzzy_rules_consequents.png')}")
+
         visualize_attention_weights(model, SAVE_PATH)
+        logger.info(f"注意力权重热图已保存至: {os.path.join(SAVE_PATH, 'fuzzy_rules_attention.png')}")
+
+        # [创新点 6] 可视化规则融合历史
+        if merging_history:
+            visualize_rule_merging_history(merging_history, SAVE_PATH)
+            logger.info(f"规则融合历史图已保存至: {os.path.join(SAVE_PATH, 'rule_merging_history.png')}")
+
+        # 记录最终规则数量
+        final_rules = model.classifier.num_active_rules.item()
+        logger.info(f"最终激活规则数量: {final_rules}/{cfg.MAX_RULES}")
+        logger.info(f"规则压缩率: {100 * (1 - final_rules / cfg.MAX_RULES):.1f}%")
+
+    # 记录训练总结
+    logger.info("\n" + "=" * 60)
+    logger.info("训练总结:")
+    logger.info(f"数据集: {cfg.DATASET_NAME}")
+    logger.info(f"模型类型: {cfg.MODEL_TYPE}")
+    logger.info(f"特征提取器: {cfg.EXTRACTOR_TYPE}")
+    logger.info(f"最佳测试准确率: {best_acc:.2f}%")
+    logger.info(f"最终训练准确率: {history['train_acc'][-1]:.2f}%")
+    logger.info(f"最终测试准确率: {history['test_acc'][-1]:.2f}%")
+    if cfg.MODEL_TYPE == 'DFM_FNCN':
+        logger.info(f"最终规则数量: {model.classifier.num_active_rules.item()}")
+        logger.info(f"规则融合次数: {len(merging_history)}")
+    logger.info("=" * 60)
+
+    # 关闭日志处理器
+    for handler in logger.handlers:
+        handler.close()
+    logger.handlers.clear()
+
+    print(f"\n训练完成! 所有结果已保存到: {SAVE_PATH}")
+    print(f"训练日志已保存到: {os.path.join(SAVE_PATH, 'training_log.txt')}")
 
     return SAVE_PATH
 

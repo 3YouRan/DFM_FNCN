@@ -7,7 +7,10 @@
     <list default="true" id="d3f412cb-1e95-4cce-aba7-e5c332af9816" name="更改" comment="V2.0 第四个创新点，将创新点分为结构设计创新和学习算法创新作为两个章节">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/train.py" beforeDir="false" afterPath="$PROJECT_DIR$/train.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train_decoder.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_decoder.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/validation.py" beforeDir="false" afterPath="$PROJECT_DIR$/validation.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/visualize_rule.py" beforeDir="false" afterPath="$PROJECT_DIR$/visualize_rule.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -173,9 +176,9 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.main" />
         <item itemvalue="Python.visualize_rule" />
         <item itemvalue="Python.train_decoder" />
-        <item itemvalue="Python.main" />
         <item itemvalue="Python.train_decoder_gan" />
         <item itemvalue="Python.train" />
       </list>

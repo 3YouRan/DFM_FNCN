@@ -45,7 +45,7 @@ def load_model_and_config(model_path):
         sys.exit()
 
     print(f"正在从 {model_path} 加载模型...")
-    checkpoint = torch.load(model_path, map_location=cfg.DEVICE)
+    checkpoint = torch.load(model_path, map_location=cfg.DEVICE,weights_only=False)
 
     configure_model_from_checkpoint(checkpoint)
 

@@ -628,7 +628,7 @@ def run_decoder_training(run_dir):
         print(f"错误: 找不到模型文件 '{model_path}'。")
         return
 
-    checkpoint = torch.load(model_path, map_location=cfg.DEVICE)
+    checkpoint = torch.load(model_path, map_location=cfg.DEVICE,weights_only=False)
     configure_model_from_checkpoint(checkpoint)
 
     cfg.MAX_RULES = checkpoint['max_rules']
@@ -701,7 +701,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
+    TEST_DIR = './checkpoints/GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251225_205947'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

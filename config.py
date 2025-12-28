@@ -104,8 +104,8 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 1000
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-35)
-INIT_SIGMA = 1.05
+PHI_TH = np.exp(-45)
+INIT_SIGMA = 1.2
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -133,7 +133,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
 USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 30             # 初始聚类中心数量
+N_CLUSTERS = 39             # 初始聚类中心数量
 CLUSTERING_SAMPLE_LIMIT = 60000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
@@ -148,17 +148,40 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
 PRUNING_THRESHOLD = 0.6
+
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
 # ==========================================
 USE_ATTENTION_GUIDED_DECODER = True  # 是否使用注意力引导的解码器
-ATTENTION_GUIDED_DECODER_WEIGHT = 2  # 注意力调制强度 (0.0-1.0)
+ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
+
 # ==========================================
 # 11. [创新点 5] 多尺度规则可视化(弃用)
 # ==========================================
 USE_MULTI_SCALE_VISUALIZATION = False  # 是否启用多尺度可视化
 MULTI_SCALE_LEVELS = ['coarse', 'medium', 'fine']  # 可视化尺度
 MULTI_SCALE_WEIGHTS = [0.3, 0.5, 0.2]  # 各尺度融合权重
+
+# ==========================================
+# 12. [创新点 6] 学习方法创新 - 动态规则融合
+# ==========================================
+USE_RULE_MERGING = True          # 是否启用动态规则融合
+# 融合方法:
+# 'SIMILARITY': 基于规则中心的相似度 (余弦相似度)
+# 'ACTIVATION_CORRELATION': 基于规则激活的相关性
+MERGING_METHOD = 'SIMILARITY'
+# 融合阈值:
+# 对于 'SIMILARITY': 建议 0.8 ~ 0.95 (余弦相似度高于此值则融合)
+# 对于 'ACTIVATION_CORRELATION': 建议 0.7 ~ 0.9 (激活相关性高于此值则融合)
+MERGING_THRESHOLD = 0.8
+# 融合策略:
+# 'WEIGHTED_AVERAGE': 加权平均 (根据规则置信度或激活频率)
+# 'DOMINANT_RULE': 保留置信度更高的规则
+MERGING_STRATEGY = 'WEIGHTED_AVERAGE'
+# 融合时机:
+# 'EVERY_EPOCH': 每个epoch结束后融合
+# 'FINAL_ONLY': 只在训练结束时融合
+MERGING_TIMING = 'EVERY_EPOCH'
 
 def print_config():
     print("=" * 30)
@@ -169,4 +192,5 @@ def print_config():
     print(f"CLUSTERING INIT: {USE_CLUSTERING_INIT} (K={N_CLUSTERS})")
     print(f"PRUNING: {USE_PRUNING} (Method: {PRUNING_METHOD}, Th: {PRUNING_THRESHOLD})")
     print(f"ATTENTION GUIDED DECODER: {USE_ATTENTION_GUIDED_DECODER}")
+    print(f"RULE MERGING: {USE_RULE_MERGING} (Method: {MERGING_METHOD}, Th: {MERGING_THRESHOLD})")
     print("=" * 30)
