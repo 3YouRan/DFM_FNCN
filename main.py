@@ -16,6 +16,8 @@ def main():
     # run_training 会返回新创建的运行目录路径
     run_dir = run_training()
 
+    
+
     if not run_dir or not os.path.exists(run_dir):
         print("训练失败或未返回有效的运行目录。退出。")
         sys.exit(1)

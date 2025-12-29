@@ -13,7 +13,8 @@ from datetime import datetime
 import medmnist
 from medmnist import BloodMNIST
 # [修改] 更新 AMP 导入
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast,GradScaler # type: ignore
+
 import scipy.special
 # [创新点 3] 导入 KMeans
 from sklearn.cluster import KMeans
@@ -593,8 +594,8 @@ def run_training():
 
     # [修改] 获取数据加载器和类别权重
     train_loader, test_loader, class_weights = get_data_loaders()
-    logger.info(f"训练集大小: {len(train_loader.dataset)}")
-    logger.info(f"测试集大小: {len(test_loader.dataset)}")
+    logger.info(f"训练集大小: {len(train_loader.dataset)}") # type: ignore
+    logger.info(f"测试集大小: {len(test_loader.dataset)}") # type: ignore
     logger.info(f"类别权重: {class_weights.tolist()}")
 
     if cfg.MODEL_TYPE == 'DFM_FNCN': model = FullModel().to(cfg.DEVICE)
@@ -611,7 +612,7 @@ def run_training():
     logger.info("已应用类别权重 (Class Weights) 以解决样本不平衡问题。")
 
     optimizer = optim.Adam(model.parameters(), lr=cfg.LR)
-    scaler = GradScaler(device='cuda', enabled=(cfg.DEVICE.type == 'cuda'))
+    scaler = GradScaler(device='cuda', enabled=(cfg.DEVICE.type == 'cuda')) # type: ignore
 
     history = {'train_loss': [], 'train_acc': [], 'test_loss': [], 'test_acc': []}
     best_acc = 0.0
@@ -659,7 +660,7 @@ def run_training():
             logger.info(best_msg)
 
         if cfg.MODEL_TYPE == 'DFM_FNCN':
-            active_rules = model.classifier.num_active_rules.item()
+            active_rules = model.classifier.num_active_rules.item() # type: ignore
             rules_msg = f"    Active Rules: {active_rules}/{cfg.MAX_RULES}"
             print(rules_msg)
             logger.info(rules_msg)
@@ -672,9 +673,9 @@ def run_training():
                         'epoch': epoch + 1,
                         'merged_count': merged_count,
                         'merge_pairs': merge_pairs,
-                        'rule_count': model.classifier.num_active_rules.item()
+                        'rule_count': model.classifier.num_active_rules.item() # type: ignore
                     })
-                    merge_msg = f"    [Merging] 融合了 {merged_count} 对规则，当前规则数: {model.classifier.num_active_rules.item()}"
+                    merge_msg = f"    [Merging] 融合了 {merged_count} 对规则，当前规则数: {model.classifier.num_active_rules.item()}" # type: ignore
                     logger.info(merge_msg)
 
         epoch_end_time = datetime.now()
@@ -727,7 +728,7 @@ def run_training():
                 'epoch': cfg.EPOCHS,
                 'merged_count': merged_count,
                 'merge_pairs': merge_pairs,
-                'rule_count': model.classifier.num_active_rules.item()
+                'rule_count': model.classifier.num_active_rules.item() # type: ignore
             })
 
             # 保存融合后的模型
@@ -735,7 +736,7 @@ def run_training():
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'max_rules': cfg.MAX_RULES,
-                'config_params': checkpoint['config_params']
+                'config_params': checkpoint['config_params'] # type: ignore
             }, merged_model_save_path)
             logger.info(f"融合后的模型已保存至: {merged_model_save_path}")
 
@@ -764,7 +765,7 @@ def run_training():
             logger.info(f"规则融合历史图已保存至: {os.path.join(SAVE_PATH, 'rule_merging_history.png')}")
 
         # 记录最终规则数量
-        final_rules = model.classifier.num_active_rules.item()
+        final_rules = model.classifier.num_active_rules.item() # type: ignore
         logger.info(f"最终激活规则数量: {final_rules}/{cfg.MAX_RULES}")
         logger.info(f"规则压缩率: {100 * (1 - final_rules / cfg.MAX_RULES):.1f}%")
 
@@ -778,7 +779,7 @@ def run_training():
     logger.info(f"最终训练准确率: {history['train_acc'][-1]:.2f}%")
     logger.info(f"最终测试准确率: {history['test_acc'][-1]:.2f}%")
     if cfg.MODEL_TYPE == 'DFM_FNCN':
-        logger.info(f"最终规则数量: {model.classifier.num_active_rules.item()}")
+        logger.info(f"最终规则数量: {model.classifier.num_active_rules.item()}") # type: ignore
         logger.info(f"规则融合次数: {len(merging_history)}")
     logger.info("=" * 60)
 

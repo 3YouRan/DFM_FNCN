@@ -164,7 +164,7 @@ def run_validation(run_dir):
     print("=" * 50 + "\n")
 
     report_dict = classification_report(targets, predictions, target_names=cfg.CLASS_NAMES, zero_division=0, output_dict=True)
-    accuracy_value = report_dict.pop('accuracy')
+    accuracy_value = report_dict.pop('accuracy') # type: ignore
     df = pd.DataFrame(report_dict).transpose()
     df.loc['accuracy'] = pd.Series({'f1-score': accuracy_value, 'support': df.loc['weighted avg', 'support']})
     csv_save_path = os.path.join(output_dir, 'classification_report.csv')

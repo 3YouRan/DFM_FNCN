@@ -542,7 +542,7 @@ def run_visualization(run_dir):
 
     # 创建规则摘要表格
     classifier = model.classifier
-    num_rules = classifier.num_active_rules.item()
+    num_rules = classifier.num_active_rules.item() # type: ignore
     if num_rules > 0:
         consequents = classifier.consequents[:num_rules].detach().cpu().numpy()
         consequents_prob = scipy.special.softmax(consequents, axis=1)
@@ -561,7 +561,7 @@ def run_visualization(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251225_205947'
+    TEST_DIR = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251228_182450'
 
     if os.path.exists(TEST_DIR):
         run_visualization(TEST_DIR)

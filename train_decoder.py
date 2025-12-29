@@ -369,9 +369,9 @@ class AttentionGuidedMultiScaleDecoder(nn.Module):
         )
 
         # 多尺度解码分支
-        self.coarse_decoder = self._create_coarse_decoder()
-        self.medium_decoder = self._create_medium_decoder()
-        self.fine_decoder = self._create_fine_decoder()
+        self.coarse_decoder = self._create_coarse_decoder() # pyright: ignore[reportCallIssue]
+        self.medium_decoder = self._create_medium_decoder() # pyright: ignore[reportCallIssue]
+        self.fine_decoder = self._create_fine_decoder() # pyright: ignore[reportCallIssue]
 
         # 尺度融合层
         self.fusion_layer = nn.Sequential(
@@ -701,7 +701,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251225_205947'
+    TEST_DIR = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251228_182450'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

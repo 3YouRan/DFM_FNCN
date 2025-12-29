@@ -5,7 +5,7 @@ import numpy as np
 import torchvision.models as models
 import config as cfg
 # [修改] 使用 torch.amp.autocast
-from torch.amp import autocast
+from torch.amp.autocast_mode import autocast
 
 
 # =========================================================================
@@ -135,7 +135,7 @@ class Dynamic_DFM_FNCN(nn.Module):
             x = self.bn(x)
             x_flat = x.view(b, self.n_channels, -1)
 
-            active_rules_count = self.num_active_rules.item()
+            active_rules_count = self.num_active_rules.item() # type: ignore
             if active_rules_count == 0:
                 if training_phase and labels is not None:
                     self._add_rule_immediately(x_flat[0], labels[0])
@@ -189,7 +189,7 @@ class Dynamic_DFM_FNCN(nn.Module):
                 max_phi, _ = phi.max(dim=1)
                 min_phi_val, min_idx = max_phi.min(dim=0)
                 if min_phi_val < self.phi_th:
-                    self.pending_rule_data = (x_flat[min_idx].detach(), labels[min_idx].detach())
+                    self.pending_rule_data = (x_flat[min_idx].detach(), labels[min_idx].detach()) # type: ignore
 
             output_logits = torch.matmul(phi_norm_double.to(torch.float32), active_consequents)
 
@@ -203,7 +203,7 @@ class Dynamic_DFM_FNCN(nn.Module):
             x = self.bn(x)
             x_flat = x.view(b, self.n_channels, -1)
 
-            active_rules_count = self.num_active_rules.item()
+            active_rules_count = self.num_active_rules.item() # type: ignore
             if active_rules_count == 0:
                 return None
 
@@ -262,22 +262,22 @@ class Dynamic_DFM_FNCN(nn.Module):
                 self.alpha[:new_count] = kept_alpha
 
             # 5. 更新计数
-            old_count = self.num_active_rules.item()
-            self.num_active_rules.fill_(new_count)
+            old_count = self.num_active_rules.item() # type: ignore
+            self.num_active_rules.fill_(new_count) # type: ignore
             print(f"--> [Pruning] 规则数从 {old_count} 减少到 {new_count}。")
 
     def _add_rule_immediately(self, center_feat, label):
         with torch.no_grad():
             self._init_rule_at_index(0, center_feat, label)
-            self.num_active_rules.add_(1)
+            self.num_active_rules.add_(1) # type: ignore
             print(f"--> [Init] 初始规则 #1 (Class: {label.item()})")
 
     def commit_pending_rule(self):
-        if self.pending_rule_data is not None and self.num_active_rules.item() < self.max_rules:
+        if self.pending_rule_data is not None and self.num_active_rules.item() < self.max_rules: # type: ignore
             with torch.no_grad():
                 center, label = self.pending_rule_data
-                self._init_rule_at_index(self.num_active_rules.item(), center, label)
-                self.num_active_rules.add_(1)
+                self._init_rule_at_index(self.num_active_rules.item(), center, label) # type: ignore
+                self.num_active_rules.add_(1) # type: ignore
             self.pending_rule_data = None
 
     def _init_rule_at_index(self, idx, center_feat, label):
@@ -315,7 +315,7 @@ class Dynamic_DFM_FNCN(nn.Module):
                 self.consequents[i, label] = 2.0
 
             # 4. 更新激活规则数
-            self.num_active_rules.fill_(num_init)
+            self.num_active_rules.fill_(num_init) # type: ignore
             print(f"--> [Batch Init] 已批量初始化 {num_init} 条规则。")
 
     def merge_similar_rules(self, test_loader=None):
@@ -323,7 +323,7 @@ class Dynamic_DFM_FNCN(nn.Module):
         if not cfg.USE_RULE_MERGING:
             return 0, []
 
-        active_rules_count = self.num_active_rules.item()
+        active_rules_count = self.num_active_rules.item() # type: ignore
         if active_rules_count <= 1:
             return 0, []
 
@@ -361,8 +361,8 @@ class Dynamic_DFM_FNCN(nn.Module):
 
             # 更新激活规则计数
             new_count = active_rules_count - len(merge_pairs)
-            old_count = self.num_active_rules.item()
-            self.num_active_rules.fill_(new_count)
+            old_count = self.num_active_rules.item() # type: ignore
+            self.num_active_rules.fill_(new_count) # type: ignore
 
             print(f"--> [Merging] 规则数从 {old_count} 减少到 {new_count}，融合了 {len(merge_pairs)} 对规则。")
 
@@ -511,7 +511,7 @@ class Dynamic_DFM_FNCN(nn.Module):
             if alpha is not None:
                 alpha_i, alpha_j = alpha[i], alpha[j]
                 if cfg.MERGING_STRATEGY == 'WEIGHTED_AVERAGE':
-                    merged_alpha = weight_i * alpha_i + weight_j * alpha_j
+                    merged_alpha = weight_i * alpha_i + weight_j * alpha_j # type: ignore
                 elif cfg.MERGING_STRATEGY == 'DOMINANT_RULE':
                     if conf_i >= conf_j:
                         merged_alpha = alpha_i
@@ -519,9 +519,9 @@ class Dynamic_DFM_FNCN(nn.Module):
                         merged_alpha = alpha_j
 
             merged_rules_info.append({
-                'center': merged_center,
-                'width': merged_width,
-                'consequent': merged_consequent,
+                'center': merged_center, # type: ignore
+                'width': merged_width, # type: ignore
+                'consequent': merged_consequent, # type: ignore
                 'alpha': merged_alpha,
                 'original_indices': (i, j),
                 'confidences': (conf_i.item(), conf_j.item())
@@ -534,11 +534,11 @@ class Dynamic_DFM_FNCN(nn.Module):
         if not merged_rules_info:
             return
 
-        active_rules_count = self.num_active_rules.item()
+        active_rules_count = self.num_active_rules.item() # type: ignore
         merge_pairs = [info['original_indices'] for info in merged_rules_info]
 
         # 找出需要保留的规则索引（未被融合的规则）
-        all_indices = set(range(active_rules_count))
+        all_indices = set(range(active_rules_count)) # type: ignore
         merged_indices = set()
         for i, j in merge_pairs:
             merged_indices.add(i)

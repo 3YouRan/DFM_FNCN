@@ -104,8 +104,8 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 1000
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-45)
-INIT_SIGMA = 1.2
+PHI_TH = np.exp(-30)
+INIT_SIGMA = 1.05
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -133,7 +133,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
 USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 39             # 初始聚类中心数量
+N_CLUSTERS = 30             # 初始聚类中心数量
 CLUSTERING_SAMPLE_LIMIT = 60000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
@@ -147,7 +147,7 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 修剪阈值:
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
-PRUNING_THRESHOLD = 0.6
+PRUNING_THRESHOLD = 0.48
 
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
@@ -173,7 +173,7 @@ MERGING_METHOD = 'SIMILARITY'
 # 融合阈值:
 # 对于 'SIMILARITY': 建议 0.8 ~ 0.95 (余弦相似度高于此值则融合)
 # 对于 'ACTIVATION_CORRELATION': 建议 0.7 ~ 0.9 (激活相关性高于此值则融合)
-MERGING_THRESHOLD = 0.8
+MERGING_THRESHOLD = 0.85
 # 融合策略:
 # 'WEIGHTED_AVERAGE': 加权平均 (根据规则置信度或激活频率)
 # 'DOMINANT_RULE': 保留置信度更高的规则
