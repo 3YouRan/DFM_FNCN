@@ -6,8 +6,8 @@ import medmnist
 # 1. 实验控制中心 (Experiment Control)
 # ==========================================
 # 选择要使用的数据集
-# 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB'
-DATASET_NAME = 'FASHION_MNIST'
+# 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION'
+DATASET_NAME = 'MIO_TCD_CLASSIFICATION'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
@@ -15,6 +15,13 @@ DATASET_NAME = 'FASHION_MNIST'
 # 这对于快速验证或专注于特定交通标志非常有用
 GTSRB_SUBSET_INDICES = [12,13, 14, 15,17, 33, 34, 35,36,37,38,39,40]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
 # GTSRB_SUBSET_INDICES = None  # 示例: Stop, No Entry, Turn Right, Turn Left, Ahead Only
+
+# [CIFAR100 专属配置] 选择要训练的类别子集
+# 如果为 None: 使用全部 100 个类别
+# 如果为列表: 仅使用列表中的类别索引 (例如 [0, 1, 2] 只训练前三类)
+# 或者使用类别名称列表 (例如 ['apple', 'aquarium_fish', 'baby'])
+CIFAR100_SUBSET_INDICES = None  # 使用索引选择，例如 [0, 1, 2, 10, 11, 12]
+CIFAR100_SUBSET_NAMES = None    # 使用名称选择，例如 ['apple', 'aquarium_fish', 'baby']
 
 # 选择模型架构
 # 'DFM_FNCN': 论文复现的模糊神经网络
@@ -46,6 +53,24 @@ GTSRB_ALL_CLASSES = [
     'End no passing veh > 3.5 tons'
 ]
 
+# CIFAR100 完整类别名称 (100类)
+CIFAR100_ALL_CLASSES = [
+    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
+    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
+    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
+    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
+    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
+    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
+    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
+    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
+    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine', 'possum',
+    'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal', 'shark',
+    'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel',
+    'streetcar', 'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone',
+    'television', 'tiger', 'tractor', 'train', 'trout', 'tulip', 'turtle',
+    'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
+]
+
 # 动态计算 GTSRB 配置
 if GTSRB_SUBSET_INDICES is None:
     _gtsrb_n_classes = 43
@@ -54,21 +79,44 @@ else:
     _gtsrb_n_classes = len(GTSRB_SUBSET_INDICES)
     _gtsrb_class_names = [GTSRB_ALL_CLASSES[i] for i in GTSRB_SUBSET_INDICES]
 
+# 动态计算 CIFAR100 配置
+# 首先确定要使用的子集索引
+_cifar100_selected_indices = None
+_cifar100_n_classes = 100
+_cifar100_class_names = CIFAR100_ALL_CLASSES
+
+if DATASET_NAME == 'CIFAR100':
+    if CIFAR100_SUBSET_NAMES is not None:
+        # 将类别名称转换为索引
+        _cifar100_selected_indices = []
+        for name in CIFAR100_SUBSET_NAMES:
+            if name in CIFAR100_ALL_CLASSES:
+                _cifar100_selected_indices.append(CIFAR100_ALL_CLASSES.index(name))
+            else:
+                raise ValueError(f"未知的 CIFAR100 类别名称: {name}")
+    elif CIFAR100_SUBSET_INDICES is not None:
+        _cifar100_selected_indices = CIFAR100_SUBSET_INDICES
+    
+    # 计算类别数和类别名称
+    if _cifar100_selected_indices is not None:
+        _cifar100_n_classes = len(_cifar100_selected_indices)
+        _cifar100_class_names = [CIFAR100_ALL_CLASSES[i] for i in _cifar100_selected_indices]
+
 DATASET_CONFIGS = {
     'FASHION_MNIST': {
         'n_classes': 10, 'in_channels': 1,
         'class_names': ['T-shirt', 'Trouser', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Boot'],
-        'target_size': (28, 28)
+        'target_size': (32, 32)
     },
     'SVHN': {
         'n_classes': 10, 'in_channels': 3,
         'class_names': [str(i) for i in range(10)],
-        'target_size': (28, 28)
+        'target_size': (32, 32)
     },
     'BLOOD_MNIST': {
         'n_classes': 8, 'in_channels': 3,
         'class_names': list(medmnist.INFO['bloodmnist']['label'].values()),
-        'target_size': (28, 28)
+        'target_size': (32, 32)
     },
     'GTSRB': {
         'n_classes': _gtsrb_n_classes,
@@ -76,7 +124,35 @@ DATASET_CONFIGS = {
         'class_names': _gtsrb_class_names,
         # 注意: 为了兼容 models.py 中针对 28x28 输入设计的下采样层，
         # 我们将 GTSRB 统一缩放到 28x28。
-        'target_size': (28, 28)
+        'target_size': (32, 32)
+    },
+    'MNIST': {
+        'n_classes': 10, 'in_channels': 1,
+        'class_names': [str(i) for i in range(10)],
+        'target_size': (32, 32)
+    },
+    'CIFAR10': {
+        'n_classes': 10, 'in_channels': 3,
+        'class_names': ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'],
+        'target_size': (32, 32)
+    },
+    'CIFAR100': {
+        'n_classes': _cifar100_n_classes,
+        'in_channels': 3,
+        'class_names': _cifar100_class_names,
+        'target_size': (32, 32)
+    },
+    'GEOMETRIC_SHAPES': {
+        'n_classes': 8,
+        'in_channels': 1,
+        'class_names': ['circle', 'ellipse', 'octagon', 'parallelogram', 'pentagon', 'rectangle', 'rhombus', 'square'],
+        'target_size': (32, 32)
+    },
+    'MIO_TCD_CLASSIFICATION': {
+        'n_classes': 10,
+        'in_channels': 3,
+        'class_names': ['articulated_truck', 'bicycle', 'bus', 'car', 'motorcycle', 'non-motorized_vehicle', 'pedestrian', 'pickup_truck', 'single_unit_truck', 'work_van'],
+        'target_size': (32, 32)
     }
 }
 
@@ -94,7 +170,7 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # 3. 全局训练配置
 # ==========================================
 BATCH_SIZE = 4
-EPOCHS = 100
+EPOCHS = 50
 LR = 0.0005
 SEED = 42
 DATA_ROOT = './data'
@@ -104,8 +180,8 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 1000
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-30)
-INIT_SIGMA = 1.05
+PHI_TH = np.exp(-55)
+INIT_SIGMA = 1.2
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -120,8 +196,8 @@ CNN_DROPOUT = 0.5
 # ==========================================
 # 6. 特征提取器输出配置
 # ==========================================
-N_CHANNELS_OUT = 128
-IMG_DIM_OUT = 6
+N_CHANNELS_OUT =128
+IMG_DIM_OUT = 7
 P_DIM = IMG_DIM_OUT * IMG_DIM_OUT
 
 # ==========================================
@@ -133,7 +209,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
 USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 30             # 初始聚类中心数量
+N_CLUSTERS = 24            # 初始聚类中心数量
 CLUSTERING_SAMPLE_LIMIT = 60000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
@@ -147,7 +223,7 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 修剪阈值:
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
-PRUNING_THRESHOLD = 0.48
+PRUNING_THRESHOLD = 0.515
 
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器

@@ -76,11 +76,16 @@ def get_test_loader():
     else:
         norm_mean, norm_std = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
 
-    data_transform = transforms.Compose([
-        transforms.Resize(cfg.TARGET_SIZE),
+    # 构建转换列表
+    transform_list = [transforms.Resize(cfg.TARGET_SIZE)]
+    # 对于 GEOMETRIC_SHAPES 数据集，添加灰度转换
+    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+        transform_list.append(transforms.Grayscale(num_output_channels=1))
+    transform_list.extend([
         transforms.ToTensor(),
         transforms.Normalize(norm_mean, norm_std)
     ])
+    data_transform = transforms.Compose(transform_list)
 
     if cfg.DATASET_NAME == 'FASHION_MNIST':
         test_dataset = datasets.FashionMNIST(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
@@ -102,6 +107,57 @@ def get_test_loader():
             subset_set = set(cfg.GTSRB_SUBSET_INDICES)
             test_indices = [i for i, (_, label) in enumerate(test_dataset._samples) if label in subset_set]
             test_dataset = Subset(test_dataset, test_indices)
+    
+    elif cfg.DATASET_NAME == 'MNIST':
+        test_dataset = datasets.MNIST(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
+    
+    elif cfg.DATASET_NAME == 'CIFAR10':
+        test_dataset = datasets.CIFAR10(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
+    
+    elif cfg.DATASET_NAME == 'CIFAR100':
+        # CIFAR100 子集处理逻辑
+        target_transform = None
+        
+        # 确定要使用的子集索引
+        selected_indices = None
+        if cfg.CIFAR100_SUBSET_NAMES is not None:
+            # 将类别名称转换为索引
+            selected_indices = []
+            for name in cfg.CIFAR100_SUBSET_NAMES:
+                if name in cfg.CIFAR100_ALL_CLASSES:
+                    selected_indices.append(cfg.CIFAR100_ALL_CLASSES.index(name))
+                else:
+                    raise ValueError(f"未知的 CIFAR100 类别名称: {name}")
+        elif cfg.CIFAR100_SUBSET_INDICES is not None:
+            selected_indices = cfg.CIFAR100_SUBSET_INDICES
+        
+        test_dataset = datasets.CIFAR100(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
+        
+        if selected_indices is not None:
+            # 1. 创建标签映射: 原始ID -> 0..N-1
+            mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(selected_indices)}
+            
+            # 2. 过滤数据集
+            subset_set = set(selected_indices)
+            test_indices = []
+            
+            # 测试集过滤
+            test_targets = test_dataset.targets if hasattr(test_dataset, 'targets') else test_dataset.targets
+            for i, label in enumerate(test_targets):
+                if label in subset_set:
+                    test_indices.append(i)
+            
+            test_dataset = Subset(test_dataset, test_indices)
+            print(f"CIFAR100 Subset: Test {len(test_dataset)}")
+    
+    elif cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+        # 加载整个数据集
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'geometric_shapes'), transform=data_transform)
+        # 使用与训练相同的随机种子进行分割 (80% 训练, 20% 测试)
+        train_size = int(0.8 * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        _, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"Geometric Shapes 测试集大小: {len(test_dataset)}")
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 

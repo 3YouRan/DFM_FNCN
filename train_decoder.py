@@ -13,7 +13,7 @@ from medmnist import BloodMNIST
 
 # 移除硬编码的 RUN_DIR_TO_LOAD
 
-DECODER_EPOCHS = 100
+DECODER_EPOCHS = 30
 DECODER_LR = 0.001
 
 
@@ -529,6 +529,49 @@ def get_train_loader():
             subset_set = set(cfg.GTSRB_SUBSET_INDICES)
             train_indices = [i for i, (_, label) in enumerate(train_dataset._samples) if label in subset_set]
             train_dataset = Subset(train_dataset, train_indices)
+    
+    elif cfg.DATASET_NAME == 'MNIST':
+        train_dataset = datasets.MNIST(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
+    
+    elif cfg.DATASET_NAME == 'CIFAR10':
+        train_dataset = datasets.CIFAR10(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
+    
+    elif cfg.DATASET_NAME == 'CIFAR100':
+        # CIFAR100 子集处理逻辑
+        target_transform = None
+        
+        # 确定要使用的子集索引
+        selected_indices = None
+        if cfg.CIFAR100_SUBSET_NAMES is not None:
+            # 将类别名称转换为索引
+            selected_indices = []
+            for name in cfg.CIFAR100_SUBSET_NAMES:
+                if name in cfg.CIFAR100_ALL_CLASSES:
+                    selected_indices.append(cfg.CIFAR100_ALL_CLASSES.index(name))
+                else:
+                    raise ValueError(f"未知的 CIFAR100 类别名称: {name}")
+        elif cfg.CIFAR100_SUBSET_INDICES is not None:
+            selected_indices = cfg.CIFAR100_SUBSET_INDICES
+        
+        train_dataset = datasets.CIFAR100(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
+        
+        if selected_indices is not None:
+            # 1. 创建标签映射: 原始ID -> 0..N-1
+            mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(selected_indices)}
+            
+            # 2. 过滤数据集
+            subset_set = set(selected_indices)
+            train_indices = []
+            
+            # 训练集过滤
+            train_targets = train_dataset.targets if hasattr(train_dataset, 'targets') else train_dataset.targets
+            for i, label in enumerate(train_targets):
+                if label in subset_set:
+                    train_indices.append(i)
+            
+            train_dataset = Subset(train_dataset, train_indices)
+            print(f"CIFAR100 Subset: Train {len(train_dataset)}")
+    
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
@@ -701,7 +744,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251228_182450'
+    TEST_DIR = 'checkpoints/MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251229_155927'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

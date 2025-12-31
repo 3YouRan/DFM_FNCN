@@ -79,11 +79,16 @@ def get_data_loaders():
     else:
         norm_mean, norm_std = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
 
-    data_transform = transforms.Compose([
-        transforms.Resize(cfg.TARGET_SIZE),
+    # 构建转换列表
+    transform_list = [transforms.Resize(cfg.TARGET_SIZE)]
+    # 对于 GEOMETRIC_SHAPES 数据集，添加灰度转换
+    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+        transform_list.append(transforms.Grayscale(num_output_channels=1))
+    transform_list.extend([
         transforms.ToTensor(),
         transforms.Normalize(norm_mean, norm_std)
     ])
+    data_transform = transforms.Compose(transform_list)
 
     # 初始化类别计数
     class_counts = torch.zeros(cfg.N_CLASSES)
@@ -153,6 +158,114 @@ def get_data_loaders():
             for _, label in train_dataset._samples:
                 class_counts[label] += 1
 
+    elif cfg.DATASET_NAME == 'MNIST':
+        train_dataset = datasets.MNIST(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
+        test_dataset = datasets.MNIST(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
+        # 统计样本
+        labels = train_dataset.targets
+        class_counts = torch.bincount(labels, minlength=cfg.N_CLASSES).float()
+
+    elif cfg.DATASET_NAME == 'CIFAR10':
+        train_dataset = datasets.CIFAR10(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
+        test_dataset = datasets.CIFAR10(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
+        # 统计样本
+        labels = torch.tensor(train_dataset.targets)
+        class_counts = torch.bincount(labels, minlength=cfg.N_CLASSES).float()
+
+    elif cfg.DATASET_NAME == 'CIFAR100':
+        # CIFAR100 子集处理逻辑 (参考 GTSRB)
+        target_transform = None
+        
+        # 加载原始数据集
+        train_dataset = datasets.CIFAR100(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
+        test_dataset = datasets.CIFAR100(root=cfg.DATA_ROOT, train=False, download=True, transform=data_transform)
+        
+        # 确定要使用的子集索引
+        selected_indices = None
+        if cfg.CIFAR100_SUBSET_NAMES is not None:
+            # 将类别名称转换为索引
+            selected_indices = []
+            for name in cfg.CIFAR100_SUBSET_NAMES:
+                if name in cfg.CIFAR100_ALL_CLASSES:
+                    selected_indices.append(cfg.CIFAR100_ALL_CLASSES.index(name))
+                else:
+                    raise ValueError(f"未知的 CIFAR100 类别名称: {name}")
+        elif cfg.CIFAR100_SUBSET_INDICES is not None:
+            selected_indices = cfg.CIFAR100_SUBSET_INDICES
+        
+        if selected_indices is not None:
+            # 1. 创建标签映射: 原始ID -> 0..N-1
+            mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(selected_indices)}
+            # 设置 target_transform
+            target_transform = transforms.Lambda(lambda y: mapping.get(y, -1))
+            
+            # 2. 过滤数据集并统计样本
+            subset_set = set(selected_indices)
+            train_indices = []
+            test_indices = []
+            
+            print("正在筛选 CIFAR100 子集并统计类别分布...")
+            
+            # 训练集过滤 - 使用 targets 属性
+            train_targets = train_dataset.targets if hasattr(train_dataset, 'targets') else train_dataset.targets
+            for i, label in enumerate(train_targets):
+                if label in subset_set:
+                    train_indices.append(i)
+                    # 映射后的标签
+                    mapped_label = mapping[label]
+                    class_counts[mapped_label] += 1
+            
+            # 测试集过滤
+            test_targets = test_dataset.targets if hasattr(test_dataset, 'targets') else test_dataset.targets
+            for i, label in enumerate(test_targets):
+                if label in subset_set:
+                    test_indices.append(i)
+            
+            train_dataset = Subset(train_dataset, train_indices)
+            test_dataset = Subset(test_dataset, test_indices)
+            print(f"CIFAR100 Subset: Train {len(train_dataset)}, Test {len(test_dataset)}")
+        else:
+            # 使用全部数据
+            train_targets = train_dataset.targets if hasattr(train_dataset, 'targets') else train_dataset.targets
+            for label in train_targets:
+                class_counts[label] += 1
+
+    elif cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+        # 加载整个数据集（无预定义分割）
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'geometric_shapes'), transform=data_transform)
+        # 统计类别样本
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for _, label in full_dataset.samples:
+            class_counts[label] += 1
+        # 按 80% 训练, 20% 测试分割
+        train_size = int(0.8 * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        # 需要从子集中获取标签以重新计算类别计数（仅训练集）
+        # 由于 random_split 不保留标签属性，我们通过遍历来统计
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for idx in train_dataset.indices:
+            _, label = full_dataset.samples[idx]
+            class_counts[label] += 1
+        print(f"Geometric Shapes 数据集: 总共 {len(full_dataset)} 张图像, 训练 {len(train_dataset)}, 测试 {len(test_dataset)}")
+    elif cfg.DATASET_NAME == 'MIO_TCD_CLASSIFICATION':
+        # 加载整个数据集（无预定义分割）
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'MIO-TCD-Classification'), transform=data_transform)
+        # 统计类别样本
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for _, label in full_dataset.samples:
+            class_counts[label] += 1
+        # 按 5:1 分割 (训练集:测试集 = 5:1) 即训练集占5/6，测试集占1/6
+        train_ratio = 5/6
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        # 重新计算训练集的类别计数
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for idx in train_dataset.indices:
+            _, label = full_dataset.samples[idx]
+            class_counts[label] += 1
+        print(f"MIO-TCD-Classification 数据集: 总共 {len(full_dataset)} 张图像, 训练 {len(train_dataset)}, 测试 {len(test_dataset)}")
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
@@ -208,7 +321,7 @@ def perform_clustering_initialization(model, train_loader, logger=None):
             labels_list.append(target.numpy())
 
     all_features = np.concatenate(features_list, axis=0)
-    all_labels = np.concatenate(labels_list, axis=0)
+    all_labels = np.concatenate(labels_list, axis=0).flatten()
 
     log_msg = f"收集了 {all_features.shape[0]} 个样本用于聚类。"
     print(log_msg)
@@ -233,6 +346,8 @@ def perform_clustering_initialization(model, train_loader, logger=None):
         if len(indices) > 0:
             # 找到这些样本对应的真实标签
             k_labels = all_labels[indices]
+            # 确保 k_labels 是一维数组
+            k_labels = k_labels.flatten()
             # 多数投票
             counts = np.bincount(k_labels, minlength=cfg.N_CLASSES)
             majority_class = np.argmax(counts)
