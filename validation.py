@@ -158,6 +158,24 @@ def get_test_loader():
         test_size = len(full_dataset) - train_size
         _, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
         print(f"Geometric Shapes 测试集大小: {len(test_dataset)}")
+    elif cfg.DATASET_NAME == 'MIO_TCD_CLASSIFICATION':
+        # 加载整个数据集
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'MIO-TCD-Classification'), transform=data_transform)
+        # 使用与训练相同的随机种子进行分割 (训练集占5/6，测试集占1/6)
+        train_ratio = 5/6
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        _, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"MIO-TCD-Classification 测试集大小: {len(test_dataset)}")
+    elif cfg.DATASET_NAME == 'VEHICLES':
+        # 加载整个数据集
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'Vehicles'), transform=data_transform)
+        # 使用与训练相同的随机种子进行分割 (训练集占4/5，测试集占1/5)
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        _, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"Vehicles 测试集大小: {len(test_dataset)}")
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
@@ -231,7 +249,7 @@ def run_validation(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试，需手动指定路径
-    TEST_DIR = './checkpoints/YOUR_RUN_DIR'
+    TEST_DIR = './checkpoints/MIO_TCD_CLASSIFICATION_DFM_FNCN_RESNET18_PRETRAINED_20251231_101215'
     if os.path.exists(TEST_DIR):
         run_validation(TEST_DIR)
     else:

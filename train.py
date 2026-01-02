@@ -16,8 +16,8 @@ from medmnist import BloodMNIST
 from torch.amp import autocast,GradScaler # type: ignore
 
 import scipy.special
-# [创新点 3] 导入 KMeans
-from sklearn.cluster import KMeans
+# [创新点 3] 导入 MiniBatchKMeans
+from sklearn.cluster import MiniBatchKMeans
 import logging  # 新增：导入日志模块
 
 import config as cfg
@@ -256,7 +256,7 @@ def get_data_loaders():
         for _, label in full_dataset.samples:
             class_counts[label] += 1
         # 按 5:1 分割 (训练集:测试集 = 5:1) 即训练集占5/6，测试集占1/6
-        train_ratio = 5/6
+        train_ratio = 4/5
         train_size = int(train_ratio * len(full_dataset))
         test_size = len(full_dataset) - train_size
         train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
@@ -266,6 +266,24 @@ def get_data_loaders():
             _, label = full_dataset.samples[idx]
             class_counts[label] += 1
         print(f"MIO-TCD-Classification 数据集: 总共 {len(full_dataset)} 张图像, 训练 {len(train_dataset)}, 测试 {len(test_dataset)}")
+    elif cfg.DATASET_NAME == 'VEHICLES':
+        # 加载整个数据集（无预定义分割）
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'Vehicles'), transform=data_transform)
+        # 统计类别样本
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for _, label in full_dataset.samples:
+            class_counts[label] += 1
+        # 按 4:1 分割 (训练集:测试集 = 4:1) 即训练集占80%，测试集占20%
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        # 重新计算训练集的类别计数
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for idx in train_dataset.indices:
+            _, label = full_dataset.samples[idx]
+            class_counts[label] += 1
+        print(f"Vehicles 数据集: 总共 {len(full_dataset)} 张图像, 训练 {len(train_dataset)}, 测试 {len(test_dataset)}")
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
@@ -289,8 +307,8 @@ def get_data_loaders():
     return train_loader, test_loader, weights
 
 def perform_clustering_initialization(model, train_loader, logger=None):
-    """[创新点 3] 使用 K-Means 聚类初始化规则中心"""
-    log_msg = f"\n>>> 正在执行聚类初始化 (K-Means, K={cfg.N_CLUSTERS})..."
+    """[创新点 3] 使用 MiniBatchKMeans 聚类初始化规则中心"""
+    log_msg = f"\n>>> 正在执行聚类初始化 (MiniBatchKMeans, K={cfg.N_CLUSTERS})..."
     print(log_msg)
     if logger:
         logger.info(log_msg)
@@ -329,12 +347,12 @@ def perform_clustering_initialization(model, train_loader, logger=None):
         logger.info(log_msg)
 
     # 2. 执行聚类
-    log_msg = "正在运行 K-Means..."
+    log_msg = "正在运行 MiniBatchKMeans..."
     print(log_msg)
     if logger:
         logger.info(log_msg)
 
-    kmeans = KMeans(n_clusters=cfg.N_CLUSTERS, n_init=10, random_state=cfg.SEED)
+    kmeans = MiniBatchKMeans(n_clusters=cfg.N_CLUSTERS, n_init=10, random_state=cfg.SEED, batch_size=1024)
     cluster_labels = kmeans.fit_predict(all_features)
     cluster_centers = kmeans.cluster_centers_  # (K, Feature_Dim)
 
@@ -811,6 +829,15 @@ def run_training():
         logger.info("\n>>> 训练结束，开始执行规则修剪...")
         checkpoint = torch.load(best_model_save_path,weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
+
+        # 保存修剪前的完整模型（加后缀complete）
+        complete_model_save_path = os.path.join(SAVE_PATH, 'best_model_complete.pth')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'max_rules': cfg.MAX_RULES,
+            'config_params': checkpoint['config_params']
+        }, complete_model_save_path)
+        logger.info(f"修剪前的完整模型已保存至: {complete_model_save_path}")
 
         perform_rule_pruning(model, test_loader, logger)
 

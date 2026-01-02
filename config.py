@@ -6,8 +6,8 @@ import medmnist
 # 1. 实验控制中心 (Experiment Control)
 # ==========================================
 # 选择要使用的数据集
-# 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION'
-DATASET_NAME = 'MIO_TCD_CLASSIFICATION'
+# 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES'
+DATASET_NAME = 'VEHICLES'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
@@ -153,6 +153,12 @@ DATASET_CONFIGS = {
         'in_channels': 3,
         'class_names': ['articulated_truck', 'bicycle', 'bus', 'car', 'motorcycle', 'non-motorized_vehicle', 'pedestrian', 'pickup_truck', 'single_unit_truck', 'work_van'],
         'target_size': (32, 32)
+    },
+    'VEHICLES': {
+        'n_classes': 7,
+        'in_channels': 3,
+        'class_names': ['Auto Rickshaws', 'Bikes', 'Cars', 'Motorcycles', 'Planes', 'Ships', 'Trains'],
+        'target_size': (64, 64)
     }
 }
 
@@ -167,10 +173,10 @@ CLASS_NAMES = CURRENT_DATA_CONFIG['class_names']
 TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 
 # ==========================================
-# 3. 全局训练配置
+# 3. 全局训练配置   /*
 # ==========================================
 BATCH_SIZE = 4
-EPOCHS = 50
+EPOCHS = 100
 LR = 0.0005
 SEED = 42
 DATA_ROOT = './data'
@@ -178,10 +184,10 @@ DATA_ROOT = './data'
 # ==========================================
 # 4. DFM-FNCN 模糊模型特定配置
 # ==========================================
-MAX_RULES = 1000
+MAX_RULES = 200
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-55)
-INIT_SIGMA = 1.2
+PHI_TH = np.exp(-50)
+INIT_SIGMA = 1.5
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -197,7 +203,7 @@ CNN_DROPOUT = 0.5
 # 6. 特征提取器输出配置
 # ==========================================
 N_CHANNELS_OUT =128
-IMG_DIM_OUT = 7
+IMG_DIM_OUT = 15
 P_DIM = IMG_DIM_OUT * IMG_DIM_OUT
 
 # ==========================================
@@ -209,8 +215,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
 USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 24            # 初始聚类中心数量
-CLUSTERING_SAMPLE_LIMIT = 60000 # 用于聚类的样本数量限制 (避免内存溢出)
+N_CLUSTERS = 30            # 初始聚类中心数量
+CLUSTERING_SAMPLE_LIMIT = 300000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
 # 9. [创新点 3] 学习算法创新 - 规则修剪
@@ -223,7 +229,7 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 修剪阈值:
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
-PRUNING_THRESHOLD = 0.515
+PRUNING_THRESHOLD = 0.450
 
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
@@ -257,6 +263,9 @@ MERGING_STRATEGY = 'WEIGHTED_AVERAGE'
 # 融合时机:
 # 'EVERY_EPOCH': 每个epoch结束后融合
 # 'FINAL_ONLY': 只在训练结束时融合
+
+
+
 MERGING_TIMING = 'EVERY_EPOCH'
 
 def print_config():

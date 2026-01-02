@@ -11,13 +11,13 @@ from models import FullModel
 from train_decoder import get_decoder, get_train_loader  # 复用之前的工具函数
 
 # --- 配置 ---
-RUN_DIR_TO_LOAD = './checkpoints/！！！ GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251203_230059'
+RUN_DIR_TO_LOAD = './checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
 # ---------------------------------------------------------
 
 MODEL_PATH = os.path.join(RUN_DIR_TO_LOAD, 'best_model.pth')
 # 保存为 perceptual 版本，以免覆盖之前的
 DECODER_SAVE_PATH = os.path.join(RUN_DIR_TO_LOAD, 'decoder_perceptual.pth')
-EPOCHS = 30
+EPOCHS = 200
 LR = 0.001
 
 

@@ -561,7 +561,7 @@ def run_visualization(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251228_182450'
+    TEST_DIR = './checkpoints/MIO_TCD_CLASSIFICATION_DFM_FNCN_RESNET18_PRETRAINED_20251231_101215'
 
     if os.path.exists(TEST_DIR):
         run_visualization(TEST_DIR)

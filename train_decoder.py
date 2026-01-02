@@ -572,6 +572,36 @@ def get_train_loader():
             train_dataset = Subset(train_dataset, train_indices)
             print(f"CIFAR100 Subset: Train {len(train_dataset)}")
     
+    elif cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+        # 加载整个数据集（无预定义分割）
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'geometric_shapes'), transform=data_transform)
+        # 按与训练相同的比例分割（训练集占80%）
+        train_ratio = 0.8
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, _ = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"Geometric Shapes 训练集大小: {len(train_dataset)}")
+    
+    elif cfg.DATASET_NAME == 'MIO_TCD_CLASSIFICATION':
+        # 加载整个数据集（无预定义分割）
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'MIO-TCD-Classification'), transform=data_transform)
+        # 按与训练相同的比例分割（训练集占4/5）
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, _ = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"MIO-TCD-Classification 训练集大小: {len(train_dataset)}")
+    
+    elif cfg.DATASET_NAME == 'VEHICLES':
+        # 加载整个数据集（无预定义分割）
+        full_dataset = datasets.ImageFolder(root=os.path.join(cfg.DATA_ROOT, 'Vehicles'), transform=data_transform)
+        # 按与训练相同的比例分割（训练集占4/5）
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, _ = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"Vehicles 训练集大小: {len(train_dataset)}")
+    
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
@@ -744,7 +774,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints/MNIST_DFM_FNCN_RESNET18_PRETRAINED_20251229_155927'
+    TEST_DIR = 'checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:
