@@ -249,7 +249,7 @@ def run_validation(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试，需手动指定路径
-    TEST_DIR = './checkpoints/MIO_TCD_CLASSIFICATION_DFM_FNCN_RESNET18_PRETRAINED_20251231_101215'
+    TEST_DIR = 'checkpoints/VEHICLES_DFM_FNCN_RESNET18_PRETRAINED_20260102_185802'
     if os.path.exists(TEST_DIR):
         run_validation(TEST_DIR)
     else:

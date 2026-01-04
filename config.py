@@ -124,7 +124,7 @@ DATASET_CONFIGS = {
         'class_names': _gtsrb_class_names,
         # 注意: 为了兼容 models.py 中针对 28x28 输入设计的下采样层，
         # 我们将 GTSRB 统一缩放到 28x28。
-        'target_size': (32, 32)
+        'target_size': (28, 28)
     },
     'MNIST': {
         'n_classes': 10, 'in_channels': 1,
@@ -176,7 +176,7 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # 3. 全局训练配置   /*
 # ==========================================
 BATCH_SIZE = 4
-EPOCHS = 100
+EPOCHS = 50
 LR = 0.0005
 SEED = 42
 DATA_ROOT = './data'
@@ -186,8 +186,8 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 200
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-50)
-INIT_SIGMA = 1.5
+PHI_TH = np.exp(-55)
+INIT_SIGMA = 1.2
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -203,7 +203,10 @@ CNN_DROPOUT = 0.5
 # 6. 特征提取器输出配置
 # ==========================================
 N_CHANNELS_OUT =128
-IMG_DIM_OUT = 15
+if DATASET_NAME == 'VEHICLES':
+    IMG_DIM_OUT = 15
+else:
+    IMG_DIM_OUT = 6
 P_DIM = IMG_DIM_OUT * IMG_DIM_OUT
 
 # ==========================================
@@ -238,7 +241,17 @@ USE_ATTENTION_GUIDED_DECODER = True  # 是否使用注意力引导的解码器
 ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
 
 # ==========================================
-# 11. [创新点 5] 多尺度规则可视化(弃用)
+# 11. [创新点 5] 结构设计创新：GAN解码器
+# ==========================================
+USE_GAN_DECODER = True  # 是否使用GAN作为解码器
+GAN_ADVERSARIAL_WEIGHT = 0.1  # 对抗损失权重 (相对于重建损失)
+GAN_DISCRIMINATOR_LR = 0.0002  # 判别器学习率
+GAN_GENERATOR_LR = 0.001  # 生成器学习率 (与解码器学习率相同)
+GAN_DISCRIMINATOR_UPDATE_RATIO = 1  # 每训练生成器一次，训练判别器的次数
+GAN_USE_LSGAN = True  # 使用LSGAN (最小二乘GAN) 损失，否则使用BCE
+
+# ==========================================
+# 12. [创新点 6] 多尺度规则可视化(弃用)
 # ==========================================
 USE_MULTI_SCALE_VISUALIZATION = False  # 是否启用多尺度可视化
 MULTI_SCALE_LEVELS = ['coarse', 'medium', 'fine']  # 可视化尺度

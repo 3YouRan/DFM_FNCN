@@ -14,7 +14,8 @@ import config as cfg
 from models import FullModel
 from train_decoder import (
     SimpleCNNDecoder, ResNet18Decoder, VGG16Decoder,
-    AttentionGuidedDecoder, MultiScaleDecoder, AttentionGuidedMultiScaleDecoder
+    AttentionGuidedDecoder, MultiScaleDecoder, AttentionGuidedMultiScaleDecoder,
+    GANDecoder
 )
 
 # 设置中文字体
@@ -42,6 +43,8 @@ def configure_model_from_checkpoint(checkpoint):
         cfg.USE_ATTENTION_GUIDED_DECODER = params['USE_ATTENTION_GUIDED_DECODER']
     if 'USE_MULTI_SCALE_VISUALIZATION' in params:
         cfg.USE_MULTI_SCALE_VISUALIZATION = params['USE_MULTI_SCALE_VISUALIZATION']
+    if 'USE_GAN_DECODER' in params:
+        cfg.USE_GAN_DECODER = params['USE_GAN_DECODER']
 
     config_data = cfg.DATASET_CONFIGS[cfg.DATASET_NAME]
     cfg.N_CLASSES = config_data['n_classes']
@@ -51,7 +54,7 @@ def configure_model_from_checkpoint(checkpoint):
 
     print(f"推断配置: DATASET={cfg.DATASET_NAME}, MODEL={cfg.MODEL_TYPE}, EXTRACTOR={cfg.EXTRACTOR_TYPE}")
     print(f"ATTENTION: {cfg.USE_ATTENTION}, ATTENTION_GUIDED_DECODER: {cfg.USE_ATTENTION_GUIDED_DECODER}")
-    print(f"MULTI_SCALE: {cfg.USE_MULTI_SCALE_VISUALIZATION}")
+    print(f"MULTI_SCALE: {cfg.USE_MULTI_SCALE_VISUALIZATION}, GAN_DECODER: {cfg.USE_GAN_DECODER}")
 
 
 def get_decoder_from_config(run_dir):
@@ -64,13 +67,16 @@ def get_decoder_from_config(run_dir):
 
         # 更新配置
         if 'decoder_type' in decoder_info:
-            if decoder_info['decoder_type'] == 'multi_scale':
+            if decoder_info['decoder_type'] == 'gan':
+                cfg.USE_GAN_DECODER = True
+            elif decoder_info['decoder_type'] == 'multi_scale':
                 cfg.USE_MULTI_SCALE_VISUALIZATION = True
             elif decoder_info['decoder_type'] == 'attention_guided':
                 cfg.USE_ATTENTION_GUIDED_DECODER = True
             elif decoder_info['decoder_type'] == 'standard':
                 cfg.USE_MULTI_SCALE_VISUALIZATION = False
                 cfg.USE_ATTENTION_GUIDED_DECODER = False
+                cfg.USE_GAN_DECODER = False
 
     # 确定基础解码器类
     if cfg.EXTRACTOR_TYPE == 'RESNET18_PRETRAINED':
@@ -82,8 +88,12 @@ def get_decoder_from_config(run_dir):
     else:
         raise ValueError(f"未知的 EXTRACTOR_TYPE: {cfg.EXTRACTOR_TYPE}")
 
-    # 根据配置选择解码器类型
-    if cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
+    # 根据配置选择解码器类型（优先级与train_decoder.py一致）
+    if cfg.USE_GAN_DECODER:
+        print(f"使用GAN解码器 (GAN Decoder)")
+        decoder_class = GANDecoder
+        decoder_instance = decoder_class(base_class)
+    elif cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
         print(f"使用注意力引导的多尺度解码器 (Attention-Guided Multi-Scale Decoder)")
         decoder_class = AttentionGuidedMultiScaleDecoder
         decoder_instance = decoder_class(base_class)
@@ -102,6 +112,7 @@ def get_decoder_from_config(run_dir):
 
     # 尝试加载不同命名的解码器文件
     decoder_paths = [
+        os.path.join(run_dir, 'decoder_gan.pth'),
         os.path.join(run_dir, 'decoder_attention_guided.pth'),
         os.path.join(run_dir, 'decoder_multi_scale.pth'),
         os.path.join(run_dir, 'decoder.pth')
@@ -119,7 +130,17 @@ def get_decoder_from_config(run_dir):
 
     print(f"加载解码器: {decoder_path}")
     decoder = decoder_instance.to(cfg.DEVICE)
-    decoder.load_state_dict(torch.load(decoder_path, map_location=cfg.DEVICE,weights_only=False))
+    
+    # 对于GAN解码器，加载的权重是生成器的权重，需要加载到decoder.generator
+    if cfg.USE_GAN_DECODER:
+        generator_state_dict = torch.load(decoder_path, map_location=cfg.DEVICE,weights_only=False)
+        # 如果权重键没有'generator.'前缀，添加前缀以匹配GANDecoder的结构
+        # 但保存的权重是生成器本身的权重（即基础解码器的权重），而decoder.generator是基础解码器实例
+        # 直接加载到decoder.generator
+        decoder.generator.load_state_dict(generator_state_dict)
+    else:
+        decoder.load_state_dict(torch.load(decoder_path, map_location=cfg.DEVICE,weights_only=False))
+    
     decoder.eval()
 
     return decoder
@@ -142,12 +163,18 @@ def decode_rule_centers(decoder, centers_reshaped, rule_specific_attention=None)
                     decoded = decoder(rule_center, rule_attention)
                 elif isinstance(decoder, MultiScaleDecoder):
                     decoded = decoder(rule_center, rule_attention, scale='all')
+                elif isinstance(decoder, GANDecoder):
+                    # GAN解码器可能支持注意力权重（如果基础解码器支持）
+                    decoded = decoder(rule_center, rule_attention)
                 else:
                     decoded = decoder(rule_center)
             else:
                 # 没有注意力权重
                 if isinstance(decoder, MultiScaleDecoder):
                     decoded = decoder(rule_center, scale='all')
+                elif isinstance(decoder, GANDecoder):
+                    # GAN解码器前向传播
+                    decoded = decoder(rule_center)
                 else:
                     decoded = decoder(rule_center)
 
@@ -284,7 +311,9 @@ def visualize_single_scale_rules(model, decoder, run_dir):
     plt.tight_layout(pad=2.0, h_pad=1.5, w_pad=1.5)
 
     # 根据解码器类型选择保存路径
-    if cfg.USE_ATTENTION_GUIDED_DECODER and cfg.USE_MULTI_SCALE_VISUALIZATION:
+    if cfg.USE_GAN_DECODER:
+        save_path = os.path.join(run_dir, 'rules_visualized_gan.png')
+    elif cfg.USE_ATTENTION_GUIDED_DECODER and cfg.USE_MULTI_SCALE_VISUALIZATION:
         save_path = os.path.join(run_dir, 'rules_visualized_attention_multi_scale.png')
     elif cfg.USE_ATTENTION_GUIDED_DECODER:
         save_path = os.path.join(run_dir, 'rules_visualized_attention_guided.png')
@@ -334,6 +363,21 @@ def visualize_multi_scale_rules(model, decoder, run_dir):
     if not cfg.USE_MULTI_SCALE_VISUALIZATION:
         return
 
+    # 确定实际用于多尺度解码的生成器
+    if isinstance(decoder, GANDecoder):
+        print("检测到GAN解码器，使用其生成器进行多尺度可视化")
+        generator = decoder.generator
+        # 检查生成器是否为多尺度解码器
+        if not isinstance(generator, (MultiScaleDecoder, AttentionGuidedMultiScaleDecoder)):
+            print("警告: GAN解码器的生成器不是多尺度解码器，跳过多尺度可视化")
+            return
+        scale_decoder = generator
+    elif isinstance(decoder, (MultiScaleDecoder, AttentionGuidedMultiScaleDecoder)):
+        scale_decoder = decoder
+    else:
+        print("警告: 解码器不是多尺度解码器，跳过多尺度可视化")
+        return
+
     classifier = model.classifier
     num_rules = classifier.num_active_rules.item()
     print(f"检测到 {num_rules} 条激活规则，进行多尺度可视化...")
@@ -371,15 +415,15 @@ def visualize_multi_scale_rules(model, decoder, run_dir):
 
                 if rule_specific_attention is not None:
                     rule_attention = rule_specific_attention[i:i + 1]
-                    if isinstance(decoder, (MultiScaleDecoder, AttentionGuidedMultiScaleDecoder)):
-                        decoded = decoder(rule_center, rule_attention, scale=scale)
+                    if isinstance(scale_decoder, (MultiScaleDecoder, AttentionGuidedMultiScaleDecoder)):
+                        decoded = scale_decoder(rule_center, rule_attention, scale=scale)
                     else:
-                        decoded = decoder(rule_center, rule_attention)
+                        decoded = scale_decoder(rule_center, rule_attention)
                 else:
-                    if isinstance(decoder, (MultiScaleDecoder, AttentionGuidedMultiScaleDecoder)):
-                        decoded = decoder(rule_center, scale=scale)
+                    if isinstance(scale_decoder, (MultiScaleDecoder, AttentionGuidedMultiScaleDecoder)):
+                        decoded = scale_decoder(rule_center, scale=scale)
                     else:
-                        decoded = decoder(rule_center)
+                        decoded = scale_decoder(rule_center)
 
                 decoded_images.append(decoded)
 
@@ -561,7 +605,7 @@ def run_visualization(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = './checkpoints/MIO_TCD_CLASSIFICATION_DFM_FNCN_RESNET18_PRETRAINED_20251231_101215'
+    TEST_DIR = './checkpoints/VEHICLES_DFM_FNCN_RESNET18_PRETRAINED_20260104_092511'
 
     if os.path.exists(TEST_DIR):
         run_visualization(TEST_DIR)

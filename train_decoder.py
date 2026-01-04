@@ -13,7 +13,7 @@ from medmnist import BloodMNIST
 
 # 移除硬编码的 RUN_DIR_TO_LOAD
 
-DECODER_EPOCHS = 30
+DECODER_EPOCHS = 300
 DECODER_LR = 0.001
 
 
@@ -453,6 +453,66 @@ class AttentionGuidedMultiScaleDecoder(nn.Module):
         else:
             # 默认使用基础解码器
             return self.base_decoder(x)
+
+# =========================================================================
+# 创新点：GAN解码器 (GAN Decoder)
+# =========================================================================
+class Discriminator(nn.Module):
+    """判别器网络，输入图像，输出真实/虚假概率"""
+    def __init__(self, in_channels):
+        super(Discriminator, self).__init__()
+        # 简单卷积网络
+        self.model = nn.Sequential(
+            # 输入: (in_channels, H, W)
+            nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(512, 1, kernel_size=1)
+        )
+
+    def forward(self, img):
+        # 输入 img: (B, C, H, W)
+        validity = self.model(img)
+        return validity.view(-1, 1)
+
+class GANDecoder(nn.Module):
+    """GAN解码器：包含生成器（基础解码器）和判别器"""
+    def __init__(self, base_decoder_class):
+        super(GANDecoder, self).__init__()
+        self.generator = base_decoder_class()
+        self.discriminator = Discriminator(cfg.IN_CHANNELS)
+
+    def forward(self, x, attention_weights=None):
+        """
+        生成器前向传播，返回重建图像
+        x: 特征图 (B, C, H, W)
+        attention_weights: 注意力权重 (B, C) 或 None (如果基础解码器支持)
+        """
+        # 如果基础解码器支持注意力权重，传递给它
+        if hasattr(self.generator, 'forward') and callable(getattr(self.generator, 'forward', None)):
+            # 检查基础解码器是否接受attention_weights参数
+            import inspect
+            sig = inspect.signature(self.generator.forward)
+            params = list(sig.parameters.keys())
+            if 'attention_weights' in params:
+                return self.generator(x, attention_weights=attention_weights)
+            else:
+                return self.generator(x)
+        else:
+            return self.generator(x)
+
+    def discriminate(self, img):
+        """判别器前向传播，返回真实/虚假分数"""
+        return self.discriminator(img)
 def get_decoder():
     """获取解码器，根据配置选择类型"""
     # 确定基础解码器类
@@ -466,7 +526,10 @@ def get_decoder():
         raise ValueError(f"未知的 EXTRACTOR_TYPE: {cfg.EXTRACTOR_TYPE}")
 
     # 根据配置选择解码器类型
-    if cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
+    if cfg.USE_GAN_DECODER:
+        print(f"使用GAN解码器 (GAN Decoder)")
+        return GANDecoder(base_class)
+    elif cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
         print(f"使用注意力引导的多尺度解码器 (Attention-Guided Multi-Scale Decoder)")
         return AttentionGuidedMultiScaleDecoder(base_class)
     elif cfg.USE_MULTI_SCALE_VISUALIZATION:
@@ -677,7 +740,13 @@ def run_decoder_training(run_dir):
     print(f"\n>>> 开始训练解码器 (Decoder Training): {run_dir}")
 
     # 检查解码器类型
-    if cfg.USE_MULTI_SCALE_VISUALIZATION:
+    if cfg.USE_GAN_DECODER:
+        print(f"GAN解码器已启用 (Adversarial Weight: {cfg.GAN_ADVERSARIAL_WEIGHT})")
+        if cfg.GAN_USE_LSGAN:
+            print("使用LSGAN损失")
+        else:
+            print("使用BCE损失")
+    elif cfg.USE_MULTI_SCALE_VISUALIZATION:
         print(f"多尺度解码器已启用 (Weights: {cfg.MULTI_SCALE_WEIGHTS})")
     elif cfg.USE_ATTENTION_GUIDED_DECODER:
         print(f"注意力引导解码器已启用 (Weight: {cfg.ATTENTION_GUIDED_DECODER_WEIGHT})")
@@ -690,7 +759,11 @@ def run_decoder_training(run_dir):
     model_path = os.path.join(run_dir, 'best_model.pth')
 
     # 根据解码器类型选择保存路径
-    if cfg.USE_MULTI_SCALE_VISUALIZATION:
+    discriminator_save_path = None  # 默认值
+    if cfg.USE_GAN_DECODER:
+        decoder_save_path = os.path.join(run_dir, 'decoder_gan.pth')
+        discriminator_save_path = os.path.join(run_dir, 'discriminator.pth')
+    elif cfg.USE_MULTI_SCALE_VISUALIZATION:
         decoder_save_path = os.path.join(run_dir, 'decoder_multi_scale.pth')
     elif cfg.USE_ATTENTION_GUIDED_DECODER:
         decoder_save_path = os.path.join(run_dir, 'decoder_attention_guided.pth')
@@ -715,57 +788,168 @@ def run_decoder_training(run_dir):
     print("编码器已冻结。开始训练解码器...")
 
     train_loader = get_train_loader()
-    optimizer = optim.Adam(autoencoder.decoder.parameters(), lr=DECODER_LR)
-    criterion = nn.MSELoss()
 
-    autoencoder.train()
-    for epoch in range(DECODER_EPOCHS):
-        total_loss = 0
-        for batch_idx, data_tuple in enumerate(train_loader):
-            data = data_tuple[0].to(cfg.DEVICE)
+    # 根据解码器类型选择训练方式
+    if cfg.USE_GAN_DECODER:
+        # GAN训练
+        generator = autoencoder.decoder.generator
+        discriminator = autoencoder.decoder.discriminator
+        optimizer_G = optim.Adam(generator.parameters(), lr=cfg.GAN_GENERATOR_LR)
+        optimizer_D = optim.Adam(discriminator.parameters(), lr=cfg.GAN_DISCRIMINATOR_LR)
+        criterion_recon = nn.MSELoss()
+        if cfg.GAN_USE_LSGAN:
+            # LSGAN损失：最小二乘损失
+            criterion_adv = nn.MSELoss()
+        else:
+            # 标准GAN损失：BCE
+            criterion_adv = nn.BCEWithLogitsLoss()
 
-            # 提取特征
-            with torch.no_grad():
-                features = base_model.extractor(data)
+        autoencoder.train()
+        for epoch in range(DECODER_EPOCHS):
+            total_loss_G = 0
+            total_loss_D = 0
+            for batch_idx, data_tuple in enumerate(train_loader):
+                data = data_tuple[0].to(cfg.DEVICE)
 
-            # 提取样本特定的注意力权重（如果启用）
-            attention_weights = None
-            if cfg.USE_ATTENTION_GUIDED_DECODER:
-                attention_weights = extract_sample_specific_attention(base_model, data, features)
+                # 提取特征
+                with torch.no_grad():
+                    features = base_model.extractor(data)
 
-            optimizer.zero_grad()
-
-            # 根据是否使用注意力引导传递不同的参数
-            if cfg.USE_ATTENTION_GUIDED_DECODER and attention_weights is not None:
-                reconstructed_images = autoencoder(data, attention_weights)
-            else:
-                reconstructed_images = autoencoder(data)
-
-            loss = criterion(reconstructed_images, data)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-
-            if (batch_idx + 1) % 200 == 0:
-                loss_info = f"Loss: {loss.item():.6f}"
+                # 提取样本特定的注意力权重（如果启用）
+                attention_weights = None
                 if cfg.USE_ATTENTION_GUIDED_DECODER:
-                    att_info = " (With Sample-Specific Attention)" if attention_weights is not None else " (No Attention)"
-                    loss_info += att_info
-                print(f"[Epoch {epoch + 1}/{DECODER_EPOCHS}] Step {batch_idx + 1}/{len(train_loader)} | {loss_info}")
+                    attention_weights = extract_sample_specific_attention(base_model, data, features)
 
-        avg_loss = total_loss / len(train_loader)
-        print(f"\n==> Epoch {epoch + 1} 完成. 平均重建损失: {avg_loss:.6f}\n")
+                # 真实标签和虚假标签
+                batch_size = data.size(0)
+                real_label = torch.ones(batch_size, 1, device=cfg.DEVICE)
+                fake_label = torch.zeros(batch_size, 1, device=cfg.DEVICE)
 
-    torch.save(autoencoder.decoder.state_dict(), decoder_save_path)
-    print(f"解码器训练完成！权重已保存至: {decoder_save_path}")
+                # ---------------------
+                # 训练判别器
+                # ---------------------
+                optimizer_D.zero_grad()
+
+                # 真实图像的判别损失
+                real_pred = discriminator(data)
+                if cfg.GAN_USE_LSGAN:
+                    loss_D_real = criterion_adv(real_pred, real_label)
+                else:
+                    loss_D_real = criterion_adv(real_pred, real_label)
+
+                # 生成虚假图像
+                if attention_weights is not None and cfg.USE_ATTENTION_GUIDED_DECODER:
+                    fake_images = autoencoder.decoder(features, attention_weights)
+                else:
+                    fake_images = autoencoder.decoder(features)
+                fake_pred = discriminator(fake_images.detach())
+                if cfg.GAN_USE_LSGAN:
+                    loss_D_fake = criterion_adv(fake_pred, fake_label)
+                else:
+                    loss_D_fake = criterion_adv(fake_pred, fake_label)
+
+                loss_D = (loss_D_real + loss_D_fake) * 0.5
+                loss_D.backward()
+                optimizer_D.step()
+
+                # ---------------------
+                # 训练生成器
+                # ---------------------
+                optimizer_G.zero_grad()
+
+                # 重建损失
+                if attention_weights is not None and cfg.USE_ATTENTION_GUIDED_DECODER:
+                    fake_images = autoencoder.decoder(features, attention_weights)
+                else:
+                    fake_images = autoencoder.decoder(features)
+                loss_recon = criterion_recon(fake_images, data)
+
+                # 对抗损失（让判别器认为生成的图像是真实的）
+                fake_pred = discriminator(fake_images)
+                if cfg.GAN_USE_LSGAN:
+                    loss_adv = criterion_adv(fake_pred, real_label)
+                else:
+                    loss_adv = criterion_adv(fake_pred, real_label)
+
+                loss_G = loss_recon + cfg.GAN_ADVERSARIAL_WEIGHT * loss_adv
+                loss_G.backward()
+                optimizer_G.step()
+
+                total_loss_G += loss_G.item()
+                total_loss_D += loss_D.item()
+
+                if (batch_idx + 1) % 200 == 0:
+                    print(f"[Epoch {epoch + 1}/{DECODER_EPOCHS}] Step {batch_idx + 1}/{len(train_loader)} | "
+                          f"Loss_G: {loss_G.item():.6f} (Recon: {loss_recon.item():.6f}, Adv: {loss_adv.item():.6f}) | "
+                          f"Loss_D: {loss_D.item():.6f}")
+
+            avg_loss_G = total_loss_G / len(train_loader)
+            avg_loss_D = total_loss_D / len(train_loader)
+            print(f"\n==> Epoch {epoch + 1} 完成. 平均生成器损失: {avg_loss_G:.6f}, 平均判别器损失: {avg_loss_D:.6f}\n")
+
+        # 保存生成器和判别器权重
+        torch.save(generator.state_dict(), decoder_save_path)
+        torch.save(discriminator.state_dict(), discriminator_save_path)
+        print(f"GAN解码器训练完成！生成器权重已保存至: {decoder_save_path}")
+        print(f"判别器权重已保存至: {discriminator_save_path}")
+
+    else:
+        # 标准解码器训练（原有逻辑）
+        optimizer = optim.Adam(autoencoder.decoder.parameters(), lr=DECODER_LR)
+        criterion = nn.MSELoss()
+
+        autoencoder.train()
+        for epoch in range(DECODER_EPOCHS):
+            total_loss = 0
+            for batch_idx, data_tuple in enumerate(train_loader):
+                data = data_tuple[0].to(cfg.DEVICE)
+
+                # 提取特征
+                with torch.no_grad():
+                    features = base_model.extractor(data)
+
+                # 提取样本特定的注意力权重（如果启用）
+                attention_weights = None
+                if cfg.USE_ATTENTION_GUIDED_DECODER:
+                    attention_weights = extract_sample_specific_attention(base_model, data, features)
+
+                optimizer.zero_grad()
+
+                # 根据是否使用注意力引导传递不同的参数
+                if cfg.USE_ATTENTION_GUIDED_DECODER and attention_weights is not None:
+                    reconstructed_images = autoencoder(data, attention_weights)
+                else:
+                    reconstructed_images = autoencoder(data)
+
+                loss = criterion(reconstructed_images, data)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+
+                if (batch_idx + 1) % 200 == 0:
+                    loss_info = f"Loss: {loss.item():.6f}"
+                    if cfg.USE_ATTENTION_GUIDED_DECODER:
+                        att_info = " (With Sample-Specific Attention)" if attention_weights is not None else " (No Attention)"
+                        loss_info += att_info
+                    print(f"[Epoch {epoch + 1}/{DECODER_EPOCHS}] Step {batch_idx + 1}/{len(train_loader)} | {loss_info}")
+
+            avg_loss = total_loss / len(train_loader)
+            print(f"\n==> Epoch {epoch + 1} 完成. 平均重建损失: {avg_loss:.6f}\n")
+
+        torch.save(autoencoder.decoder.state_dict(), decoder_save_path)
+        print(f"解码器训练完成！权重已保存至: {decoder_save_path}")
 
     # 保存解码器类型信息
     decoder_info = {
-        'decoder_type': 'multi_scale' if cfg.USE_MULTI_SCALE_VISUALIZATION else
-        ('attention_guided' if cfg.USE_ATTENTION_GUIDED_DECODER else 'standard'),
+        'decoder_type': 'gan' if cfg.USE_GAN_DECODER else (
+            'multi_scale' if cfg.USE_MULTI_SCALE_VISUALIZATION else
+            ('attention_guided' if cfg.USE_ATTENTION_GUIDED_DECODER else 'standard')
+        ),
         'use_attention': cfg.USE_ATTENTION,
         'attention_weight': cfg.ATTENTION_GUIDED_DECODER_WEIGHT if cfg.USE_ATTENTION_GUIDED_DECODER else 0.0,
         'multi_scale_weights': cfg.MULTI_SCALE_WEIGHTS if cfg.USE_MULTI_SCALE_VISUALIZATION else None,
+        'gan_adversarial_weight': cfg.GAN_ADVERSARIAL_WEIGHT if cfg.USE_GAN_DECODER else 0.0,
+        'gan_use_lsgan': cfg.GAN_USE_LSGAN if cfg.USE_GAN_DECODER else False,
         'attention_method': 'sample_specific'  # 新增：记录注意力方法
     }
     info_path = os.path.join(run_dir, 'decoder_info.pth')
@@ -774,7 +958,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
+    TEST_DIR = 'checkpoints/VEHICLES_DFM_FNCN_RESNET18_PRETRAINED_20260104_092511'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:
