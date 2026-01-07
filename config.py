@@ -7,7 +7,7 @@ import medmnist
 # ==========================================
 # 选择要使用的数据集
 # 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES'
-DATASET_NAME = 'VEHICLES'
+DATASET_NAME = 'FASHION_MNIST'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
@@ -106,7 +106,7 @@ DATASET_CONFIGS = {
     'FASHION_MNIST': {
         'n_classes': 10, 'in_channels': 1,
         'class_names': ['T-shirt', 'Trouser', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Boot'],
-        'target_size': (32, 32)
+        'target_size': (28, 28)
     },
     'SVHN': {
         'n_classes': 10, 'in_channels': 3,
@@ -124,12 +124,12 @@ DATASET_CONFIGS = {
         'class_names': _gtsrb_class_names,
         # 注意: 为了兼容 models.py 中针对 28x28 输入设计的下采样层，
         # 我们将 GTSRB 统一缩放到 28x28。
-        'target_size': (28, 28)
+        'target_size': (32, 32)
     },
     'MNIST': {
         'n_classes': 10, 'in_channels': 1,
         'class_names': [str(i) for i in range(10)],
-        'target_size': (32, 32)
+        'target_size': (28, 28)
     },
     'CIFAR10': {
         'n_classes': 10, 'in_channels': 3,
@@ -186,8 +186,8 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 200
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-55)
-INIT_SIGMA = 1.2
+PHI_TH = np.exp(-50)
+INIT_SIGMA = 1.05
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -205,8 +205,10 @@ CNN_DROPOUT = 0.5
 N_CHANNELS_OUT =128
 if DATASET_NAME == 'VEHICLES':
     IMG_DIM_OUT = 15
-else:
+elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST':
     IMG_DIM_OUT = 6
+else:
+    IMG_DIM_OUT = 7
 P_DIM = IMG_DIM_OUT * IMG_DIM_OUT
 
 # ==========================================
@@ -232,7 +234,7 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 修剪阈值:
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
-PRUNING_THRESHOLD = 0.450
+PRUNING_THRESHOLD = 0.455
 
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
@@ -244,7 +246,9 @@ ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
 # 11. [创新点 5] 结构设计创新：GAN解码器
 # ==========================================
 USE_GAN_DECODER = True  # 是否使用GAN作为解码器
-GAN_ADVERSARIAL_WEIGHT = 0.1  # 对抗损失权重 (相对于重建损失)
+GAN_ADVERSARIAL_WEIGHT = 0.1  # 对抗损失权重 (相对于重建损失)：
+# 如果生成的图像纹理乱七八糟但轮廓对，说明对抗权重太大，减小它。
+# 如果生成的图像依然模糊，说明对抗权重太小，增大它。
 GAN_DISCRIMINATOR_LR = 0.0002  # 判别器学习率
 GAN_GENERATOR_LR = 0.001  # 生成器学习率 (与解码器学习率相同)
 GAN_DISCRIMINATOR_UPDATE_RATIO = 1  # 每训练生成器一次，训练判别器的次数

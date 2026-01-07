@@ -13,7 +13,7 @@ from medmnist import BloodMNIST
 
 # 移除硬编码的 RUN_DIR_TO_LOAD
 
-DECODER_EPOCHS = 300
+DECODER_EPOCHS = 500
 DECODER_LR = 0.001
 
 
@@ -958,7 +958,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints/VEHICLES_DFM_FNCN_RESNET18_PRETRAINED_20260104_092511'
+    TEST_DIR = 'checkpoints/FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260106_162251'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:
