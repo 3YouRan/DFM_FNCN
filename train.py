@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch.nn.functional as F
 from datetime import datetime
+import time
+from tqdm import tqdm
 import medmnist
 from medmnist import BloodMNIST
 # [修改] 更新 AMP 导入
@@ -495,7 +497,12 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, lo
     model.train()
     running_loss, correct, total = 0.0, 0, 0
 
-    for batch_idx, data_tuple in enumerate(train_loader):
+    # 使用单行动态刷新的进度条
+    pbar = tqdm(enumerate(train_loader), total=len(train_loader), 
+                desc=f"Epoch {epoch+1}", ncols=100, leave=False, 
+                smoothing=1, bar_format='{l_bar}{bar}{r_bar}')
+
+    for batch_idx, data_tuple in pbar:
         data, target = data_tuple[0].to(cfg.DEVICE), data_tuple[1].to(cfg.DEVICE)
         if target.ndim == 2 and target.shape[1] == 1: target = target.squeeze(1)
 
@@ -520,13 +527,20 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, lo
         total += target.size(0)
         correct += predicted.eq(target).sum().item()
 
-        if (batch_idx + 1) % 200 == 0:
-            log_msg = f"[Epoch {epoch + 1}] Step {batch_idx + 1}/{len(train_loader)} | Loss: {loss.item():.4f} | Acc: {100. * correct / total:.2f}%"
-            if cfg.MODEL_TYPE == 'DFM_FNCN':
-                log_msg += f" | Active Rules: {model.classifier.num_active_rules.item()}"
-            print(log_msg)
-            if logger:
-                logger.info(log_msg)
+        # 动态更新进度条信息
+        acc = 100. * correct / total
+        if cfg.MODEL_TYPE == 'DFM_FNCN':
+            rules = model.classifier.num_active_rules.item()
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'acc': f'{acc:.2f}%',
+                'rules': f'{rules}/{cfg.MAX_RULES}'
+            })
+        else:
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'acc': f'{acc:.2f}%'
+            })
 
     avg_loss = running_loss / len(train_loader)
     avg_acc = 100. * correct / total
@@ -757,6 +771,8 @@ def run_training():
     logger.info(f"\n开始训练 {cfg.MODEL_TYPE}...")
     logger.info(f"训练开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    total_start_time = time.time()
+
     for epoch in range(cfg.EPOCHS):
         epoch_start_time = datetime.now()
 
@@ -816,13 +832,14 @@ def run_training():
         logger.info(f"Epoch {epoch+1} 完成，耗时: {epoch_duration:.2f}秒")
 
     # 记录最终训练结果
+    total_time = time.time() - total_start_time
     final_msg = f"\n训练完成! 最佳测试准确率: {best_acc:.2f}%"
     print(final_msg)
     logger.info(final_msg)
     logger.info(f"训练历史 - 最终训练准确率: {history['train_acc'][-1]:.2f}%")
     logger.info(f"训练历史 - 最终测试准确率: {history['test_acc'][-1]:.2f}%")
     logger.info(f"训练结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"总训练时间: {(datetime.now() - datetime.strptime(timestamp, '%Y%m%d_%H%M%S')).total_seconds():.2f}秒")
+    logger.info(f"总训练时间: {total_time:.2f}秒 ({total_time/60:.2f}分钟)")
 
     # [创新点 2] 训练结束后执行规则修剪
     if cfg.MODEL_TYPE == 'DFM_FNCN' and cfg.USE_PRUNING:
@@ -930,8 +947,10 @@ def run_training():
         handler.close()
     logger.handlers.clear()
 
+    total_time = time.time() - total_start_time
     print(f"\n训练完成! 所有结果已保存到: {SAVE_PATH}")
     print(f"训练日志已保存到: {os.path.join(SAVE_PATH, 'training_log.txt')}")
+    print(f"总训练时间: {total_time:.2f}秒 ({total_time/60:.2f}分钟)")
 
     return SAVE_PATH
 
