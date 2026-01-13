@@ -140,9 +140,6 @@ class AttentionGuidedDecoder(nn.Module):
             return self.base_decoder(x)
 
 
-# =========================================================================
-# 基础解码器定义 (保持不变)
-# =========================================================================
 class SimpleCNNDecoder(nn.Module):
     def __init__(self):
         super(SimpleCNNDecoder, self).__init__()
@@ -590,11 +587,16 @@ def get_train_loader():
     else:
         norm_mean, norm_std = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
 
-    data_transform = transforms.Compose([
-        transforms.Resize(cfg.TARGET_SIZE),
+    # 构建转换列表
+    transform_list = [transforms.Resize(cfg.TARGET_SIZE)]
+    # 对于 GEOMETRIC_SHAPES 和 SHAPES_CLASSIFICATION 数据集，添加灰度转换
+    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES' or cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION':
+        transform_list.append(transforms.Grayscale(num_output_channels=1))
+    transform_list.extend([
         transforms.ToTensor(),
         transforms.Normalize(norm_mean, norm_std)
     ])
+    data_transform = transforms.Compose(transform_list)
 
     if cfg.DATASET_NAME == 'FASHION_MNIST':
         train_dataset = datasets.FashionMNIST(root=cfg.DATA_ROOT, train=True, download=True, transform=data_transform)
@@ -688,6 +690,18 @@ def get_train_loader():
         test_size = len(full_dataset) - train_size
         train_dataset, _ = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
         print(f"Vehicles 训练集大小: {len(train_dataset)}")
+    
+    elif cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION':
+        # 加载 Shapes Classification 数据集
+        # 路径: data/Shapes_Classification/archive(6)/shapes/
+        dataset_path = os.path.join(cfg.DATA_ROOT, 'Shapes_Classification', 'archive(6)', 'shapes')
+        full_dataset = datasets.ImageFolder(root=dataset_path, transform=data_transform)
+        # 按与训练相同的比例分割（训练集占4/5）
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, _ = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"Shapes Classification 训练集大小: {len(train_dataset)}")
     
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
@@ -1102,7 +1116,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints\\FASHION_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260106_162251'
+    TEST_DIR = 'checkpoints\\SHAPES_CLASSIFICATION_DFM_FNCN_RESNET18_PRETRAINED_20260113_092943'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

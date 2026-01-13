@@ -84,7 +84,7 @@ def get_data_loaders():
     # 构建转换列表
     transform_list = [transforms.Resize(cfg.TARGET_SIZE)]
     # 对于 GEOMETRIC_SHAPES 数据集，添加灰度转换
-    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES' or cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION':
         transform_list.append(transforms.Grayscale(num_output_channels=1))
     transform_list.extend([
         transforms.ToTensor(),
@@ -286,6 +286,26 @@ def get_data_loaders():
             _, label = full_dataset.samples[idx]
             class_counts[label] += 1
         print(f"Vehicles 数据集: 总共 {len(full_dataset)} 张图像, 训练 {len(train_dataset)}, 测试 {len(test_dataset)}")
+    elif cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION':
+        # 加载 Shapes Classification 数据集
+        # 路径: data/Shapes_Classification/archive(6)/shapes/
+        dataset_path = os.path.join(cfg.DATA_ROOT, 'Shapes_Classification', 'archive(6)', 'shapes')
+        full_dataset = datasets.ImageFolder(root=dataset_path, transform=data_transform)
+        # 统计类别样本
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for _, label in full_dataset.samples:
+            class_counts[label] += 1
+        # 按 8:2 分割 (训练集:测试集 = 8:2)
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        # 重新计算训练集的类别计数
+        class_counts = torch.zeros(cfg.N_CLASSES)
+        for idx in train_dataset.indices:
+            _, label = full_dataset.samples[idx]
+            class_counts[label] += 1
+        print(f"Shapes Classification 数据集: 总共 {len(full_dataset)} 张图像, 训练 {len(train_dataset)}, 测试 {len(test_dataset)}")
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
@@ -653,8 +673,10 @@ def visualize_rule_merging_history(merging_history, save_path):
     plt.close()
     print(f"规则融合历史图已保存至: {os.path.join(save_path, 'rule_merging_history.png')}")
 
+import shutil
+
 def save_hyperparameters(save_path):
-    """[新增] 保存超参数到 txt 文件"""
+    """[新增] 保存超参数到 txt 文件和 config.py"""
     hp_file = os.path.join(save_path, 'hyperparameters.txt')
     with open(hp_file, 'w', encoding='utf-8') as f:
         f.write("==========================================\n")
@@ -679,7 +701,7 @@ def save_hyperparameters(save_path):
 
         f.write("[Model Config]\n")
         f.write(f"MAX_RULES: {cfg.MAX_RULES}\n")
-        f.write(f"PHI_TH: {cfg.PHI_TH}\n")
+        f.write(f"PHI_TH: exp({np.log(cfg.PHI_TH):.4f})\n")
         f.write(f"INIT_SIGMA: {cfg.INIT_SIGMA}\n")
         f.write(f"USE_ATTENTION: {cfg.USE_ATTENTION}\n")
         f.write(f"N_CHANNELS_OUT: {cfg.N_CHANNELS_OUT}\n")
@@ -703,6 +725,12 @@ def save_hyperparameters(save_path):
         f.write(f"MERGING_TIMING: {cfg.MERGING_TIMING}\n")
 
     print(f"超参数已保存至: {hp_file}")
+
+    # [新增] 直接复制当前 config.py 到保存路径
+    config_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.py')
+    config_dst = os.path.join(save_path, 'config.py')
+    shutil.copy2(config_src, config_dst)
+    print(f"config.py 已保存至: {config_dst}")
 
 def run_training():
     set_seed(cfg.SEED)

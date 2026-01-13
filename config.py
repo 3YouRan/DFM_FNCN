@@ -6,7 +6,7 @@ import medmnist
 # 1. 实验控制中心 (Experiment Control)
 # ==========================================
 # 选择要使用的数据集
-# 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES'
+# 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES', 'SHAPES_CLASSIFICATION'
 DATASET_NAME = 'FASHION_MNIST'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
@@ -159,6 +159,12 @@ DATASET_CONFIGS = {
         'in_channels': 3,
         'class_names': ['Auto Rickshaws', 'Bikes', 'Cars', 'Motorcycles', 'Planes', 'Ships', 'Trains'],
         'target_size': (64, 64)
+    },
+    'SHAPES_CLASSIFICATION': {
+        'n_classes': 3,
+        'in_channels': 1,
+        'class_names': ['circles', 'squares', 'triangles'],
+        'target_size': (28, 28)
     }
 }
 
@@ -176,7 +182,7 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # 3. 全局训练配置   /*
 # ==========================================
 BATCH_SIZE = 4
-EPOCHS = 50
+EPOCHS = 100
 LR = 0.0005
 SEED = 42
 DATA_ROOT = './data'
@@ -186,8 +192,8 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 200
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-50)
-INIT_SIGMA = 1.05
+PHI_TH = 2.8625185805493937e-20
+INIT_SIGMA = 1.2
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -205,7 +211,7 @@ CNN_DROPOUT = 0.5
 N_CHANNELS_OUT =128
 if DATASET_NAME == 'VEHICLES':
     IMG_DIM_OUT = 15
-elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST':
+elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST' or DATASET_NAME == 'SHAPES_CLASSIFICATION':
     IMG_DIM_OUT = 6
 else:
     IMG_DIM_OUT = 7
@@ -220,7 +226,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
 USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 30            # 初始聚类中心数量
+N_CLUSTERS = 9            # 初始聚类中心数量
 CLUSTERING_SAMPLE_LIMIT = 300000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
@@ -234,7 +240,7 @@ PRUNING_METHOD = 'CONSEQUENT'
 # 修剪阈值:
 # 对于 'CONSEQUENT': 建议 0.3 ~ 0.5 (最大概率低于此值则修剪)
 # 对于 'ACTIVATION': 建议 0.001 ~ 0.01 (平均激活度低于此值则修剪)
-PRUNING_THRESHOLD = 0.455
+PRUNING_THRESHOLD = 0.6
 
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
@@ -246,7 +252,7 @@ ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
 # 11. [创新点 5] 结构设计创新：GAN解码器
 # ==========================================
 USE_GAN_DECODER = True  # 是否使用GAN作为解码器
-GAN_ADVERSARIAL_WEIGHT = 0.1  # 对抗损失权重 (相对于重建损失)：
+GAN_ADVERSARIAL_WEIGHT = 0.5  # 对抗损失权重 (相对于重建损失)：
 # 如果生成的图像纹理乱七八糟但轮廓对，说明对抗权重太大，减小它。
 # 如果生成的图像依然模糊，说明对抗权重太小，增大它。
 GAN_DISCRIMINATOR_LR = 0.0002  # 判别器学习率
