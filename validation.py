@@ -79,7 +79,7 @@ def get_test_loader():
     # 构建转换列表
     transform_list = [transforms.Resize(cfg.TARGET_SIZE)]
     # 对于 GEOMETRIC_SHAPES 数据集，添加灰度转换
-    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES':
+    if cfg.DATASET_NAME == 'GEOMETRIC_SHAPES' or cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION':
         transform_list.append(transforms.Grayscale(num_output_channels=1))
     transform_list.extend([
         transforms.ToTensor(),
@@ -176,6 +176,17 @@ def get_test_loader():
         test_size = len(full_dataset) - train_size
         _, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
         print(f"Vehicles 测试集大小: {len(test_dataset)}")
+    elif cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION':
+        # 加载 Shapes Classification 数据集
+        # 路径: data/Shapes_Classification/archive(6)/shapes/
+        dataset_path = os.path.join(cfg.DATA_ROOT, 'Shapes_Classification', 'archive(6)', 'shapes')
+        full_dataset = datasets.ImageFolder(root=dataset_path, transform=data_transform)
+        # 使用与训练相同的随机种子进行分割 (训练集占4/5，测试集占1/5)
+        train_ratio = 4/5
+        train_size = int(train_ratio * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        _, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size], generator=torch.Generator().manual_seed(cfg.SEED))
+        print(f"Shapes Classification 测试集大小: {len(test_dataset)}")
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 

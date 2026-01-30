@@ -51,33 +51,66 @@ def configure_model_from_checkpoint(checkpoint):
     cfg.IN_CHANNELS = config_data['in_channels']
     cfg.CLASS_NAMES = config_data['class_names']
     cfg.TARGET_SIZE = config_data['target_size']
+    
+    # 设置 IMG_DIM_OUT 和 P_DIM
+    if cfg.DATASET_NAME == 'VEHICLES':
+        cfg.IMG_DIM_OUT = 15
+    elif cfg.DATASET_NAME == 'FASHION_MNIST' or cfg.DATASET_NAME == 'MNIST' or cfg.DATASET_NAME == 'SHAPES_CLASSIFICATION' or cfg.DATASET_NAME == 'GTSRB':
+        cfg.IMG_DIM_OUT = 6
+    else:
+        cfg.IMG_DIM_OUT = 7
+    cfg.P_DIM = cfg.IMG_DIM_OUT * cfg.IMG_DIM_OUT
+    cfg.N_CHANNELS_OUT = params.get('N_CHANNELS_OUT', 128)
+    
+    # 从检查点恢复 MAX_RULES（如果有的话）
+    # 优先从 config_params 获取，如果没有则使用默认值
+    if 'max_rules' in checkpoint:
+        cfg.MAX_RULES = checkpoint['max_rules']
+    elif 'MAX_RULES' in params:
+        cfg.MAX_RULES = params['MAX_RULES']
+    else:
+        cfg.MAX_RULES = 200
+    
+    print(f"MAX_RULES: {cfg.MAX_RULES}")
 
     print(f"推断配置: DATASET={cfg.DATASET_NAME}, MODEL={cfg.MODEL_TYPE}, EXTRACTOR={cfg.EXTRACTOR_TYPE}")
     print(f"ATTENTION: {cfg.USE_ATTENTION}, ATTENTION_GUIDED_DECODER: {cfg.USE_ATTENTION_GUIDED_DECODER}")
     print(f"MULTI_SCALE: {cfg.USE_MULTI_SCALE_VISUALIZATION}, GAN_DECODER: {cfg.USE_GAN_DECODER}")
+    print(f"IMG_DIM_OUT: {cfg.IMG_DIM_OUT}, N_CHANNELS_OUT: {cfg.N_CHANNELS_OUT}")
 
 
-def get_decoder_from_config(run_dir):
-    """根据配置选择并加载解码器"""
-    # 首先尝试加载解码器信息文件
+def get_decoder_from_config(run_dir, decoder_type='both'):
+    """根据配置选择并加载解码器
+    
+    Args:
+        run_dir: 运行目录
+        decoder_type: 'standard' - 标准解码器, 'gan' - GAN解码器, 'both' - 返回两种解码器
+    """
+    # 尝试加载新的解码器信息文件格式
     decoder_info_path = os.path.join(run_dir, 'decoder_info.pth')
+    
+    # 默认路径
+    standard_decoder_path = os.path.join(run_dir, 'decoder_standard.pth')
+    gan_decoder_path = os.path.join(run_dir, 'decoder_gan.pth')
+    gan_discriminator_path = os.path.join(run_dir, 'discriminator.pth')
+    
+    decoder_info = None
+    use_new_format = False
+    
     if os.path.exists(decoder_info_path):
-        decoder_info = torch.load(decoder_info_path, map_location=cfg.DEVICE,weights_only=False)
-        print(f"加载解码器信息: {decoder_info}")
-
-        # 更新配置
-        if 'decoder_type' in decoder_info:
-            if decoder_info['decoder_type'] == 'gan':
-                cfg.USE_GAN_DECODER = True
-            elif decoder_info['decoder_type'] == 'multi_scale':
-                cfg.USE_MULTI_SCALE_VISUALIZATION = True
-            elif decoder_info['decoder_type'] == 'attention_guided':
-                cfg.USE_ATTENTION_GUIDED_DECODER = True
-            elif decoder_info['decoder_type'] == 'standard':
-                cfg.USE_MULTI_SCALE_VISUALIZATION = False
-                cfg.USE_ATTENTION_GUIDED_DECODER = False
-                cfg.USE_GAN_DECODER = False
-
+        try:
+            decoder_info = torch.load(decoder_info_path, map_location=cfg.DEVICE, weights_only=False)
+            print(f"加载解码器信息: {decoder_info}")
+            
+            # 检查是否为新格式
+            if 'standard_decoder_path' in decoder_info:
+                use_new_format = True
+                standard_decoder_path = decoder_info.get('standard_decoder_path', standard_decoder_path)
+                gan_decoder_path = decoder_info.get('gan_decoder_path', gan_decoder_path)
+                gan_discriminator_path = decoder_info.get('gan_discriminator_path', gan_discriminator_path)
+        except Exception as e:
+            print(f"加载解码器信息失败: {e}")
+    
     # 确定基础解码器类
     if cfg.EXTRACTOR_TYPE == 'RESNET18_PRETRAINED':
         base_class = ResNet18Decoder
@@ -87,63 +120,63 @@ def get_decoder_from_config(run_dir):
         base_class = SimpleCNNDecoder
     else:
         raise ValueError(f"未知的 EXTRACTOR_TYPE: {cfg.EXTRACTOR_TYPE}")
-
-    # 根据配置选择解码器类型（优先级与train_decoder.py一致）
-    if cfg.USE_GAN_DECODER:
-        print(f"使用GAN解码器 (GAN Decoder)")
-        decoder_class = GANDecoder
-        decoder_instance = decoder_class(base_class)
-    elif cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
-        print(f"使用注意力引导的多尺度解码器 (Attention-Guided Multi-Scale Decoder)")
-        decoder_class = AttentionGuidedMultiScaleDecoder
-        decoder_instance = decoder_class(base_class)
-    elif cfg.USE_MULTI_SCALE_VISUALIZATION:
-        print(f"使用多尺度解码器 (Multi-Scale Decoder)")
-        decoder_class = MultiScaleDecoder
-        decoder_instance = decoder_class(base_class)
-    elif cfg.USE_ATTENTION_GUIDED_DECODER:
-        print(f"使用注意力引导解码器 (Attention-Guided Decoder)")
-        decoder_class = AttentionGuidedDecoder
-        decoder_instance = decoder_class(base_class)
-    else:
-        print(f"使用标准解码器 (Standard Decoder)")
-        decoder_class = base_class
-        decoder_instance = decoder_class()
-
-    # 尝试加载不同命名的解码器文件
-    decoder_paths = [
-        os.path.join(run_dir, 'decoder_gan.pth'),
-        os.path.join(run_dir, 'decoder_attention_guided.pth'),
-        os.path.join(run_dir, 'decoder_multi_scale.pth'),
-        os.path.join(run_dir, 'decoder.pth')
-    ]
-
-    decoder_path = None
-    for path in decoder_paths:
-        if os.path.exists(path):
-            decoder_path = path
-            break
-
-    if decoder_path is None:
-        print("错误: 找不到解码器文件。请先运行 train_decoder.py")
-        sys.exit()
-
-    print(f"加载解码器: {decoder_path}")
-    decoder = decoder_instance.to(cfg.DEVICE)
     
-    # 对于GAN解码器，加载的权重是生成器的权重，需要加载到decoder.generator
-    if cfg.USE_GAN_DECODER:
-        generator_state_dict = torch.load(decoder_path, map_location=cfg.DEVICE,weights_only=False)
-        # 如果权重键没有'generator.'前缀，添加前缀以匹配GANDecoder的结构
-        # 但保存的权重是生成器本身的权重（即基础解码器的权重），而decoder.generator是基础解码器实例
-        # 直接加载到decoder.generator
-        decoder.generator.load_state_dict(generator_state_dict)
-    else:
-        decoder.load_state_dict(torch.load(decoder_path, map_location=cfg.DEVICE,weights_only=False))
+    decoders = {}
     
-    decoder.eval()
-
-    return decoder
+    # 加载标准解码器
+    if decoder_type in ['standard', 'both']:
+        if os.path.exists(standard_decoder_path):
+            print(f"加载标准解码器: {standard_decoder_path}")
+            
+            # 检查保存的权重是否包含注意力引导的键
+            try:
+                state_dict = torch.load(standard_decoder_path, map_location=cfg.DEVICE, weights_only=True)
+                has_attention = any('attention' in k for k in state_dict.keys())
+                has_base_decoder = any('base_decoder' in k for k in state_dict.keys())
+            except:
+                has_attention = False
+                has_base_decoder = False
+            
+            # 根据权重类型选择正确的解码器
+            if has_attention or has_base_decoder:
+                print("  检测到注意力引导解码器权重，使用 AttentionGuidedDecoder")
+                standard_decoder = AttentionGuidedDecoder(base_class).to(cfg.DEVICE)
+            else:
+                standard_decoder = base_class().to(cfg.DEVICE)
+            
+            # 使用 strict=False 加载
+            standard_decoder.load_state_dict(torch.load(standard_decoder_path, map_location=cfg.DEVICE, weights_only=False), strict=False)
+            standard_decoder.eval()
+            decoders['standard'] = standard_decoder
+        else:
+            print(f"警告: 标准解码器文件不存在: {standard_decoder_path}")
+    
+    # 加载GAN解码器
+    if decoder_type in ['gan', 'both']:
+        if os.path.exists(gan_decoder_path):
+            print(f"加载GAN解码器: {gan_decoder_path}")
+            gan_decoder = GANDecoder(base_class).to(cfg.DEVICE)
+            gan_decoder.generator.load_state_dict(torch.load(gan_decoder_path, map_location=cfg.DEVICE, weights_only=False))
+            
+            if os.path.exists(gan_discriminator_path):
+                gan_decoder.discriminator.load_state_dict(torch.load(gan_discriminator_path, map_location=cfg.DEVICE, weights_only=False))
+                print(f"加载判别器: {gan_discriminator_path}")
+            
+            gan_decoder.eval()
+            decoders['gan'] = gan_decoder
+        else:
+            print(f"警告: GAN解码器文件不存在: {gan_decoder_path}")
+    
+    # 如果只请求一种解码器，直接返回
+    if decoder_type in ['standard', 'gan']:
+        if decoder_type in decoders:
+            return decoders[decoder_type]
+        else:
+            print(f"错误: 找不到 {decoder_type} 解码器")
+            return None
+    
+    # 返回所有加载的解码器
+    return decoders
 
 def decode_rule_centers(decoder, centers_reshaped, rule_specific_attention=None):
     """统一的规则中心解码函数"""
@@ -190,11 +223,11 @@ def decode_rule_centers(decoder, centers_reshaped, rule_specific_attention=None)
     return decoded_images.cpu().numpy()
 
 
-def visualize_single_scale_rules(model, decoder, run_dir):
-    """单尺度规则可视化（使用规则特定的注意力权重）"""
+def visualize_single_scale_rules(model, decoder, run_dir, decoder_type='standard'):
+    """单尺度规则可视化（支持标准解码器和GAN解码器）"""
     classifier = model.classifier
     num_rules = classifier.num_active_rules.item()
-    print(f"检测到 {num_rules} 条激活规则。")
+    print(f"使用 {decoder_type} 解码器，检测到 {num_rules} 条激活规则。")
 
     if num_rules == 0:
         print("没有激活的规则，无法可视化。")
@@ -213,8 +246,8 @@ def visualize_single_scale_rules(model, decoder, run_dir):
     # 将中心 reshape 为 (Rules, 128, 6, 6) 以输入解码器
     centers_reshaped = centers.view(num_rules, cfg.N_CHANNELS_OUT, cfg.IMG_DIM_OUT, cfg.IMG_DIM_OUT)
 
-    # 解码规则中心（每条规则使用自己的注意力权重）
-    print("正在解码规则中心...")
+    # 解码规则中心
+    print(f"正在使用 {decoder_type} 解码器解码规则中心...")
     decoded_images = decode_rule_centers(decoder, centers_reshaped, rule_specific_attention)
 
     # 确定每条规则的预测类别
@@ -222,7 +255,7 @@ def visualize_single_scale_rules(model, decoder, run_dir):
     predicted_classes = np.argmax(consequents_prob, axis=1)
     confidences = np.max(consequents_prob, axis=1)
 
-    # 绘图 - 改进布局
+    # 绘图
     print("正在生成可视化网格...")
 
     # 动态调整列数和子图大小
@@ -244,7 +277,6 @@ def visualize_single_scale_rules(model, decoder, run_dir):
 
     fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
 
-    # 如果只有一行，axes是一维数组
     if rows == 1:
         axes = axes.reshape(1, -1)
     elif cols == 1:
@@ -267,41 +299,29 @@ def visualize_single_scale_rules(model, decoder, run_dir):
 
         class_name = cfg.CLASS_NAMES[predicted_classes[i]]
 
-        # 构建标题 - 使用更清晰的格式
         title_lines = []
         title_lines.append(f"R{i}: {class_name}")
         title_lines.append(f"Conf: {confidences[i]:.2f}")
 
         if rule_specific_attention is not None:
-            # 获取该规则最重要的3个特征通道
             rule_attention = rule_specific_attention[i].cpu().numpy()
-            top_channels = np.argsort(rule_attention)[-3:][::-1]  # 降序排列
+            top_channels = np.argsort(rule_attention)[-3:][::-1]
             top_weights = rule_attention[top_channels]
 
-            # 格式化通道和权重信息
             if len(top_channels) > 0:
                 title_lines.append(f"TopCh: {top_channels[0]}")
                 if len(top_channels) > 1:
                     title_lines.append(f"W: {top_weights[0]:.2f},{top_weights[1]:.2f}")
 
-        # 设置标题，使用较小的字体和适当的行距
         title = "\n".join(title_lines)
         ax.set_title(title, fontsize=9, pad=6)
         ax.axis('off')
 
-        # 添加边框以区分不同的规则
-        ax.spines['top'].set_visible(True)
-        ax.spines['right'].set_visible(True)
-        ax.spines['bottom'].set_visible(True)
-        ax.spines['left'].set_visible(True)
-        ax.spines['top'].set_color('#888888')
-        ax.spines['right'].set_color('#888888')
-        ax.spines['bottom'].set_color('#888888')
-        ax.spines['left'].set_color('#888888')
-        ax.spines['top'].set_linewidth(0.5)
-        ax.spines['right'].set_linewidth(0.5)
-        ax.spines['bottom'].set_linewidth(0.5)
-        ax.spines['left'].set_linewidth(0.5)
+        # 添加边框
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_color('#888888')
+            spine.set_linewidth(0.5)
 
     # 隐藏多余的子图
     for i in range(num_rules, len(axes)):
@@ -311,51 +331,145 @@ def visualize_single_scale_rules(model, decoder, run_dir):
     plt.tight_layout(pad=2.0, h_pad=1.5, w_pad=1.5)
 
     # 根据解码器类型选择保存路径
-    if cfg.USE_GAN_DECODER:
+    if decoder_type == 'gan':
         save_path = os.path.join(run_dir, 'rules_visualized_gan.png')
-    elif cfg.USE_ATTENTION_GUIDED_DECODER and cfg.USE_MULTI_SCALE_VISUALIZATION:
-        save_path = os.path.join(run_dir, 'rules_visualized_attention_multi_scale.png')
-    elif cfg.USE_ATTENTION_GUIDED_DECODER:
-        save_path = os.path.join(run_dir, 'rules_visualized_attention_guided.png')
-    elif cfg.USE_MULTI_SCALE_VISUALIZATION:
-        save_path = os.path.join(run_dir, 'rules_visualized_multi_scale.png')
     else:
         save_path = os.path.join(run_dir, 'rules_visualized_standard.png')
 
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"规则可视化结果已保存至: {save_path}")
+    print(f"{decoder_type} 规则可视化结果已保存至: {save_path}")
 
-    # 可视化注意力权重热图
-    if rule_specific_attention is not None:
-        print("正在生成规则特定注意力权重热图...")
-        fig2, ax2 = plt.subplots(figsize=(14, max(8, num_rules * 0.4)))
-        att_np = rule_specific_attention.cpu().numpy()
+    return save_path
 
-        im = ax2.imshow(att_np, aspect='auto', cmap='viridis')
-        ax2.set_xlabel('Feature Channel Index', fontsize=10)
-        ax2.set_ylabel('Rule Index', fontsize=10)
-        ax2.set_title('Rule-Specific Attention Weights (Softmax)', fontsize=12, pad=15)
 
-        # 设置x轴刻度 - 每10个通道显示一个刻度
-        x_ticks = np.arange(0, att_np.shape[1], 10)
-        ax2.set_xticks(x_ticks)
-        ax2.set_xticklabels(x_ticks, fontsize=8)
+def visualize_comparison_rules(model, decoders, run_dir):
+    """对比可视化：同时显示标准解码器和GAN解码器的结果"""
+    if not decoders or len(decoders) < 2:
+        print("没有足够的解码器进行对比可视化")
+        return
+    
+    classifier = model.classifier
+    num_rules = classifier.num_active_rules.item()
+    print(f"\n进行解码器对比可视化，检测到 {num_rules} 条激活规则...")
 
-        # 设置y轴刻度
-        y_ticks = np.arange(0, num_rules, max(1, num_rules // 20))
-        ax2.set_yticks(y_ticks)
-        ax2.set_yticklabels([f"R{i}" for i in y_ticks], fontsize=8)
+    if num_rules == 0:
+        print("没有激活的规则，无法可视化。")
+        return
 
-        # 添加颜色条
-        cbar = plt.colorbar(im, ax=ax2)
-        cbar.ax.tick_params(labelsize=8)
+    centers = classifier.centers[:num_rules].detach()
+    consequents = classifier.consequents[:num_rules].detach().cpu().numpy()
 
-        plt.tight_layout()
-        attention_heatmap_path = os.path.join(run_dir, 'rule_specific_attention_weights_heatmap.png')
-        plt.savefig(attention_heatmap_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f"规则特定注意力权重热图已保存至: {attention_heatmap_path}")
+    # 获取注意力权重
+    rule_specific_attention = None
+    if cfg.USE_ATTENTION and classifier.alpha is not None:
+        alpha = classifier.alpha[:num_rules].detach()
+        rule_specific_attention = F.softmax(alpha, dim=1)
+
+    centers_reshaped = centers.view(num_rules, cfg.N_CHANNELS_OUT, cfg.IMG_DIM_OUT, cfg.IMG_DIM_OUT)
+
+    # 解码所有规则
+    decoded_results = {}
+    for decoder_type, decoder in decoders.items():
+        print(f"  正在解码: {decoder_type}")
+        decoded_images = decode_rule_centers(decoder, centers_reshaped, rule_specific_attention)
+        decoded_results[decoder_type] = decoded_images
+
+    # 确定每条规则的预测类别
+    consequents_prob = scipy.special.softmax(consequents, axis=1)
+    predicted_classes = np.argmax(consequents_prob, axis=1)
+    confidences = np.max(consequents_prob, axis=1)
+
+    # 创建对比图：每行显示一个规则的两种解码结果
+    print("正在生成对比可视化...")
+    
+    cols = len(decoders) + 1  # +1 用于类别标签
+    rows = num_rules
+    
+    fig_width = cols * 4
+    fig_height = rows * 3.5
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
+    
+    if rows == 1:
+        axes = axes.reshape(1, -1)
+    axes = axes.flatten()
+
+    for i in range(num_rules):
+        ax_idx = i * cols
+        
+        # 第一列显示规则信息
+        ax = axes[ax_idx]
+        ax.axis('off')
+        class_name = cfg.CLASS_NAMES[predicted_classes[i]]
+        info_text = f"Rule {i}\n{class_name}\nConf: {confidences[i]:.2f}"
+        ax.text(0.5, 0.5, info_text, transform=ax.transAxes, 
+                fontsize=12, ha='center', va='center',
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+        
+        # 其他列显示不同解码器的结果
+        for j, (decoder_type, decoded_images) in enumerate(decoded_results.items()):
+            ax = axes[ax_idx + j + 1]
+            img = decoded_images[i]
+            img = np.transpose(img, (1, 2, 0))
+            
+            if cfg.IN_CHANNELS == 1:
+                img = img.squeeze()
+                ax.imshow(img, cmap='gray')
+            else:
+                ax.imshow(img)
+            
+            ax.set_title(f"{decoder_type}", fontsize=10)
+            ax.axis('off')
+    
+    plt.tight_layout()
+    
+    save_path = os.path.join(run_dir, 'rules_visualized_comparison.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"对比可视化已保存至: {save_path}")
+    
+    return save_path
+
+
+def visualize_attention_heatmap(classifier, num_rules, run_dir):
+    """可视化注意力权重热图"""
+    rule_specific_attention = None
+    if cfg.USE_ATTENTION and classifier.alpha is not None:
+        alpha = classifier.alpha[:num_rules].detach()
+        rule_specific_attention = F.softmax(alpha, dim=1)
+    
+    if rule_specific_attention is None:
+        return
+    
+    print("正在生成规则特定注意力权重热图...")
+    fig2, ax2 = plt.subplots(figsize=(14, max(8, num_rules * 0.4)))
+    att_np = rule_specific_attention.cpu().numpy()
+
+    im = ax2.imshow(att_np, aspect='auto', cmap='viridis')
+    ax2.set_xlabel('Feature Channel Index', fontsize=10)
+    ax2.set_ylabel('Rule Index', fontsize=10)
+    ax2.set_title('Rule-Specific Attention Weights (Softmax)', fontsize=12, pad=15)
+
+    # 设置x轴刻度 - 每10个通道显示一个刻度
+    x_ticks = np.arange(0, att_np.shape[1], 10)
+    ax2.set_xticks(x_ticks)
+    ax2.set_xticklabels(x_ticks, fontsize=8)
+
+    # 设置y轴刻度
+    y_ticks = np.arange(0, num_rules, max(1, num_rules // 20))
+    ax2.set_yticks(y_ticks)
+    ax2.set_yticklabels([f"R{i}" for i in y_ticks], fontsize=8)
+
+    # 添加颜色条
+    cbar = plt.colorbar(im, ax=ax2)
+    cbar.ax.tick_params(labelsize=8)
+
+    plt.tight_layout()
+    attention_heatmap_path = os.path.join(run_dir, 'rule_specific_attention_weights_heatmap.png')
+    plt.savefig(attention_heatmap_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"规则特定注意力权重热图已保存至: {attention_heatmap_path}")
 
 
 def visualize_multi_scale_rules(model, decoder, run_dir):
@@ -556,9 +670,15 @@ def create_rule_summary_table(run_dir, predicted_classes, confidences, rule_spec
     print(f"规则摘要表格图像已保存至: {table_path}")
 
 
-def run_visualization(run_dir):
-    """[修改] 接收 run_dir 参数供 main.py 调用"""
+def run_visualization(run_dir, compare_decoders=True):
+    """[修改] 接收 run_dir 参数，支持对比可视化
+    
+    Args:
+        run_dir: 运行目录
+        compare_decoders: 是否进行两种解码器的对比可视化
+    """
     print(f"\n>>> 开始规则可视化 (Rule Visualization): {run_dir}")
+    print(f">>> 对比模式: {'开启' if compare_decoders else '关闭'}")
 
     # 加载模型
     model_path = os.path.join(run_dir, 'best_model.pth')
@@ -571,22 +691,42 @@ def run_visualization(run_dir):
 
     # 加载模型
     model = FullModel().to(cfg.DEVICE)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # 使用 strict=False 允许加载形状不完全匹配的检查点
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     model.eval()
+    
+    classifier = model.classifier
+    num_rules = classifier.num_active_rules.item()
 
-    # 根据配置加载解码器
-    decoder = get_decoder_from_config(run_dir)
+    if compare_decoders:
+        # 加载两种解码器进行对比
+        decoders = get_decoder_from_config(run_dir, decoder_type='both')
+        
+        if decoders and len(decoders) >= 2:
+            print(f"\n已加载 {len(decoders)} 种解码器: {list(decoders.keys())}")
+            
+            # 进行对比可视化
+            visualize_comparison_rules(model, decoders, run_dir)
+            
+            # 分别对每种解码器进行可视化
+            for decoder_type, decoder in decoders.items():
+                visualize_single_scale_rules(model, decoder, run_dir, decoder_type=decoder_type)
+        else:
+            print("警告: 解码器数量不足，进行单解码器可视化")
+            decoder = get_decoder_from_config(run_dir, decoder_type='standard')
+            if decoder:
+                visualize_single_scale_rules(model, decoder, run_dir, decoder_type='standard')
+    else:
+        # 原有逻辑：加载单个解码器
+        decoder = get_decoder_from_config(run_dir, decoder_type='standard')
+        if decoder:
+            visualize_single_scale_rules(model, decoder, run_dir, decoder_type='standard')
 
-    # 执行可视化
-    visualize_single_scale_rules(model, decoder, run_dir)
-
-    # 如果启用了多尺度可视化，生成多尺度结果
-    if cfg.USE_MULTI_SCALE_VISUALIZATION:
-        visualize_multi_scale_rules(model, decoder, run_dir)
+    # 可视化注意力权重热图
+    if num_rules > 0:
+        visualize_attention_heatmap(classifier, num_rules, run_dir)
 
     # 创建规则摘要表格
-    classifier = model.classifier
-    num_rules = classifier.num_active_rules.item() # type: ignore
     if num_rules > 0:
         consequents = classifier.consequents[:num_rules].detach().cpu().numpy()
         consequents_prob = scipy.special.softmax(consequents, axis=1)
@@ -605,7 +745,11 @@ def run_visualization(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints/！！！GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20251209_115250'
+    TEST_DIR = 'checkpoints\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260125_123236'
+    
+    
+
+    
 
     if os.path.exists(TEST_DIR):
         run_visualization(TEST_DIR)
