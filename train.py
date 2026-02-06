@@ -23,7 +23,7 @@ from sklearn.cluster import MiniBatchKMeans
 import logging  # 新增：导入日志模块
 
 import config as cfg
-from models import FullModel, TraditionalCNNModel
+from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple
 
 CLASS_NAMES = cfg.CLASS_NAMES
 
@@ -69,7 +69,7 @@ def set_seed(seed):
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.benchmajrk = False
 
 def get_data_loaders():
     """
@@ -539,6 +539,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, lo
         scaler.update()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
+        # 只有 DFM_FNCN 模型需要提交待定规则
         if cfg.MODEL_TYPE == 'DFM_FNCN':
             model.classifier.commit_pending_rule()
 
@@ -773,9 +774,16 @@ def run_training():
     logger.info(f"测试集大小: {len(test_loader.dataset)}") # type: ignore
     logger.info(f"类别权重: {class_weights.tolist()}")
 
-    if cfg.MODEL_TYPE == 'DFM_FNCN': model = FullModel().to(cfg.DEVICE)
-    elif cfg.MODEL_TYPE == 'TRADITIONAL_CNN': model = TraditionalCNNModel().to(cfg.DEVICE)
-    else: raise ValueError(f"未知的 MODEL_TYPE: {cfg.MODEL_TYPE}")
+    if cfg.MODEL_TYPE == 'DFM_FNCN': 
+        model = FullModel().to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'TRADITIONAL_CNN': 
+        model = TraditionalCNNModel().to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'PLANTNET_ANFIS':
+        model = PlantNetANFIS(num_classes=cfg.N_CLASSES, use_fuzzy_layer=True, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'PLANTNET_SIMPLE':
+        model = PlantNetSimple(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    else: 
+        raise ValueError(f"未知的 MODEL_TYPE: {cfg.MODEL_TYPE}")
 
     # [创新点 3] 执行聚类初始化
     if cfg.MODEL_TYPE == 'DFM_FNCN' and cfg.USE_CLUSTERING_INIT:

@@ -1107,7 +1107,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260125_123236'
+    TEST_DIR = 'checkpoints\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260130_151401'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

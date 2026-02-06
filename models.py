@@ -625,3 +625,244 @@ class TraditionalCNNModel(nn.Module):
         x = torch.flatten(features, 1)
         logits = self.classifier(x)
         return logits
+
+
+# =========================================================================
+# PlantNet 对比算法 (复现论文中的 Fuzzy CNN 模型)
+# =========================================================================
+
+class GaussianFuzzyLayer(nn.Module):
+    """
+    实现论文 Table 2 中提到的 "Fuzzy Layer Type: Gaussian"。
+    这是一个具有可学习参数（均值和标准差）的层，模拟 ANFIS 中的模糊化过程。
+    """
+    def __init__(self, in_channels, num_membership_functions=2):
+        super(GaussianFuzzyLayer, self).__init__()
+        self.in_channels = in_channels
+        self.k = num_membership_functions
+
+        # 可学习的参数：均值 (mu) 和 标准差 (sigma)
+        # 初始化 mu 为 0 附近，sigma 为 1 附近
+        self.mu = nn.Parameter(torch.randn(in_channels, self.k) * 0.1)
+        self.sigma = nn.Parameter(torch.ones(in_channels, self.k))
+
+    def forward(self, x):
+        # x shape: [Batch, Channels, Height, Width]
+        # 我们希望在通道维度上应用模糊隶属函数
+
+        # 将输入扩展以匹配隶属度函数的数量
+        # x_expanded: [B, C, 1, H, W]
+        x_expanded = x.unsqueeze(2)
+
+        # mu, sigma: [C, K] -> [1, C, K, 1, 1]
+        mu_expanded = self.mu.view(1, self.in_channels, self.k, 1, 1)
+        sigma_expanded = self.sigma.view(1, self.in_channels, self.k, 1, 1)
+
+        # 高斯隶属函数公式: exp(- (x - mu)^2 / (2 * sigma^2))
+        # 加上一个小的 epsilon 防止除零
+        membership = torch.exp(-
+            torch.pow(x_expanded - mu_expanded, 2) / 
+            (2 * torch.pow(sigma_expanded, 2) + 1e-5)
+        )
+
+        # [B, C, K, H, W] -> [B, C * K, H, W]
+        # 将模糊特征合并回通道维度
+        B, C, K, H, W = membership.shape
+        out = membership.view(B, C * K, H, W)
+
+        return out
+
+
+class PlantNetANFIS(nn.Module):
+    """
+    复现论文中的 ANFIS Fuzzy CNN 模型结构作为对比算法。
+    参考用户提供的代码结构和论文 Table 2:
+    - Input: (224, 224, 3) 或适配项目配置的尺寸
+    - Conv Layers: 32, 64, 128 filters
+    - Kernel: 3x3
+    - Activation: ReLU
+    - Pooling: MaxPool 2x2
+    - Fuzzy Layer: Gaussian
+    """
+    def __init__(self, num_classes=None, use_fuzzy_layer=True, in_channels=3):
+        super(PlantNetANFIS, self).__init__()
+        
+        # 使用传入的 num_classes 或从配置中获取
+        num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
+        self.use_fuzzy_layer = use_fuzzy_layer
+        
+        # --- Block 1 ---
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Block 2 ---
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Block 3 ---
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.relu3 = nn.ReLU()
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Fuzzy Block ---
+        # 论文指出使用了 Fuzzy Layer。这里我们将卷积特征输入到模糊层。
+        self.num_mf = 2  # 每个通道的隶属函数数量
+        if self.use_fuzzy_layer:
+            self.fuzzy_layer = GaussianFuzzyLayer(
+                in_channels=128, 
+                num_membership_functions=self.num_mf
+            )
+        else:
+            self.fuzzy_layer = None
+        
+        # --- Fully Connected ---
+        # 使用动态计算，先占位，初始化时通过 dummy input 计算实际维度
+        self.dropout = nn.Dropout(0.5)
+        self.fc1 = nn.Identity()  # 占位，初始化后替换
+        self.fc2 = nn.Linear(512, num_classes)
+        
+        # 通过 dummy input 计算展平后的维度
+        self._init_fc_layers()
+    
+    def _init_fc_layers(self):
+        """通过 dummy input 动态计算全连接层的输入维度"""
+        with torch.no_grad():
+            # 使用配置中的 TARGET_SIZE
+            dummy_input = torch.randn(1, self.conv1.in_channels, *cfg.TARGET_SIZE)
+            x = self._forward_features(dummy_input)
+            flat_dim = x.view(1, -1).shape[1]
+            
+            # 重新创建全连接层
+            self.fc1 = nn.Linear(flat_dim, 512)
+            print(f"PlantNetANFIS: 动态计算的展平维度 = {flat_dim} (输入尺寸: {cfg.TARGET_SIZE})")
+    
+    def _forward_features(self, x):
+        """提取特征的辅助方法"""
+        x = self.pool1(self.relu1(self.bn1(self.conv1(x))))
+        x = self.pool2(self.relu2(self.bn2(self.conv2(x))))
+        x = self.pool3(self.relu3(self.bn3(self.conv3(x))))
+        
+        if self.use_fuzzy_layer and self.fuzzy_layer is not None:
+            x = self.fuzzy_layer(x)
+        
+        return x
+
+    def forward(self, x):
+        # x: [Batch, Channels, Height, Width]
+        
+        # 提取特征
+        x = self._forward_features(x)
+
+        # Flatten
+        x = torch.flatten(x, 1)
+
+        x = self.dropout(x)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+
+        # 论文使用的是 Categorical Crossentropy，所以这里输出 logits
+        return x
+
+
+class PlantNetSimple(nn.Module):
+    """
+    PlantNet 简化版对比算法 (不含模糊层)
+    标准的 CNN 架构，用于与 PlantNetANFIS 进行性能对比
+    """
+    def __init__(self, num_classes=None, in_channels=3):
+        super(PlantNetSimple, self).__init__()
+        
+        num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
+        
+        # --- Block 1 ---
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Block 2 ---
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Block 3 ---
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.relu3 = nn.ReLU()
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Block 4 ---
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm2d(256)
+        self.relu4 = nn.ReLU()
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Fully Connected ---
+        # 使用动态计算，先占位，初始化时通过 dummy input 计算实际维度
+        self.dropout = nn.Dropout(0.5)
+        self.fc1 = nn.Identity()  # 占位，初始化后替换
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, num_classes)
+        
+        # 通过 dummy input 计算展平后的维度
+        self._init_fc_layers()
+    
+    def _init_fc_layers(self):
+        """通过 dummy input 动态计算全连接层的输入维度"""
+        with torch.no_grad():
+            # 使用配置中的 TARGET_SIZE
+            dummy_input = torch.randn(1, self.conv1.in_channels, *cfg.TARGET_SIZE)
+            x = self._forward_features(dummy_input)
+            flat_dim = x.view(1, -1).shape[1]
+            
+            # 重新创建全连接层
+            self.fc1 = nn.Linear(flat_dim, 512)
+            print(f"PlantNetSimple: 动态计算的展平维度 = {flat_dim} (输入尺寸: {cfg.TARGET_SIZE})")
+    
+    def _forward_features(self, x):
+        """提取特征的辅助方法"""
+        x = self.pool1(self.relu1(self.bn1(self.conv1(x))))
+        x = self.pool2(self.relu2(self.bn2(self.conv2(x))))
+        x = self.pool3(self.relu3(self.bn3(self.conv3(x))))
+        x = self.pool4(self.relu4(self.bn4(self.conv4(x))))
+        return x
+
+    def forward(self, x):
+        x = self._forward_features(x)
+
+        x = torch.flatten(x, 1)
+
+        x = self.dropout(x)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+
+        return x
+
+
+def get_plantnet_model(model_type='ANFIS', num_classes=None, in_channels=3):
+    """
+    获取 PlantNet 模型实例
+    
+    Args:
+        model_type: 'ANFIS' - 带模糊层的ANFIS版本
+                    'SIMPLE' - 简化版CNN
+        num_classes: 分类数量
+        in_channels: 输入通道数
+    
+    Returns:
+        PlantNet 模型实例
+    """
+    if model_type == 'ANFIS':
+        return PlantNetANFIS(num_classes=num_classes, use_fuzzy_layer=True, in_channels=in_channels)
+    elif model_type == 'SIMPLE':
+        return PlantNetSimple(num_classes=num_classes, in_channels=in_channels)
+    else:
+        raise ValueError(f"Unknown PlantNet model type: {model_type}")

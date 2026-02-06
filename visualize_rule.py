@@ -745,7 +745,7 @@ def run_visualization(run_dir, compare_decoders=True):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260125_123236'
+    TEST_DIR = 'checkpoints\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260130_151401'
     
     
 

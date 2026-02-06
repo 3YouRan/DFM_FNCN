@@ -7,7 +7,7 @@ import medmnist
 # ==========================================
 # 选择要使用的数据集
 # 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES', 'SHAPES_CLASSIFICATION'
-DATASET_NAME = 'MNIST'
+DATASET_NAME = 'FASHION_MNIST'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
@@ -26,7 +26,9 @@ CIFAR100_SUBSET_NAMES = None    # 使用名称选择，例如 ['apple', 'aquariu
 # 选择模型架构
 # 'DFM_FNCN': 论文复现的模糊神经网络
 # 'TRADITIONAL_CNN': 传统的深度卷积神经网络
-MODEL_TYPE = 'DFM_FNCN'
+# 'PLANTNET_ANFIS': PlantNet 对比算法 (带模糊层)
+# 'PLANTNET_SIMPLE': PlantNet 简化版 CNN (不含模糊层)
+MODEL_TYPE = 'PLANTNET_ANFIS'
 
 # 选择特征提取器
 # 'RESNET18_PRETRAINED', 'VGG16_PRETRAINED', 'SIMPLE_CNN'
@@ -183,7 +185,7 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # ==========================================
 BATCH_SIZE = 4
 EPOCHS = 100
-LR = 0.0005
+LR = 0.001
 SEED = 42
 DATA_ROOT = './data'
 
@@ -192,12 +194,12 @@ DATA_ROOT = './data'
 # ==========================================
 MAX_RULES = 200
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-45)
-INIT_SIGMA = 1.05
+PHI_TH = 2.8625185805493937e-20
+INIT_SIGMA = 1.2
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
-USE_ATTENTION = False
+USE_ATTENTION = True
 
 # ==========================================
 # 5. 传统 CNN 配置
@@ -225,14 +227,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ==========================================
 # 8. [创新点 2] 学习算法创新 基于聚类的规则初始化
 # ==========================================
-USE_CLUSTERING_INIT = False  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
-N_CLUSTERS = 30           # 初始聚类中心数量
+USE_CLUSTERING_INIT = True  # 是否开启聚类初始化 (初始化后仍可继续动态生成)
+N_CLUSTERS = 39           # 初始聚类中心数量
 CLUSTERING_SAMPLE_LIMIT = 300000 # 用于聚类的样本数量限制 (避免内存溢出)
 
 # ==========================================
 # 9. [创新点 3] 学习算法创新 - 规则修剪
 # ==========================================
-USE_PRUNING = False          # 是否在训练结束后自动修剪无效规则
+USE_PRUNING = True          # 是否在训练结束后自动修剪无效规则
 # 修剪方法:
 # 'CONSEQUENT': 基于后件置信度 (如果规则对任何类别的预测概率都不高，则修剪)
 # 'ACTIVATION': 基于激活强度 (如果规则在测试集上的平均激活度极低，则修剪)
@@ -246,14 +248,14 @@ PRUNING_THRESHOLD = 0.6
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
 # ==========================================
-USE_ATTENTION_GUIDED_DECODER = False  # 是否使用注意力引导的解码器
+USE_ATTENTION_GUIDED_DECODER = True  # 是否使用注意力引导的解码器
 ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
 
 # ==========================================
 # 11. [创新点 5] 结构设计创新：GAN解码器
 # ==========================================
-USE_GAN_DECODER = False  # 是否使用GAN作为解码器
-GAN_ADVERSARIAL_WEIGHT = 0.01  # 对抗损失权重 (相对于重建损失)：
+USE_GAN_DECODER = True  # 是否使用GAN作为解码器
+GAN_ADVERSARIAL_WEIGHT = 0.1  # 对抗损失权重 (相对于重建损失)：
 # 如果生成的图像纹理乱七八糟但轮廓对，说明对抗权重太大，减小它。
 # 如果生成的图像依然模糊，说明对抗权重太小，增大它。
 GAN_DISCRIMINATOR_LR = 0.0002  # 判别器学习率
@@ -271,7 +273,7 @@ MULTI_SCALE_WEIGHTS = [0.3, 0.5, 0.2]  # 各尺度融合权重
 # ==========================================
 # 12. [创新点 6] 学习方法创新 - 动态规则融合
 # ==========================================
-USE_RULE_MERGING = False          # 是否启用动态规则融合
+USE_RULE_MERGING = True          # 是否启用动态规则融合
 # 融合方法:
 # 'SIMILARITY': 基于规则中心的相似度 (余弦相似度)
 # 'ACTIVATION_CORRELATION': 基于规则激活的相关性
@@ -279,7 +281,7 @@ MERGING_METHOD = 'SIMILARITY'
 # 融合阈值:
 # 对于 'SIMILARITY': 建议 0.8 ~ 0.95 (余弦相似度高于此值则融合)
 # 对于 'ACTIVATION_CORRELATION': 建议 0.7 ~ 0.9 (激活相关性高于此值则融合)
-MERGING_THRESHOLD = 0.9
+MERGING_THRESHOLD = 0.8
 # 融合策略:
 # 'WEIGHTED_AVERAGE': 加权平均 (根据规则置信度或激活频率)
 # 'DOMINANT_RULE': 保留置信度更高的规则

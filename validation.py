@@ -15,7 +15,7 @@ import medmnist
 from medmnist import BloodMNIST
 
 import config as cfg
-from models import FullModel, TraditionalCNNModel
+from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple
 
 # 移除硬编码的 RUN_DIR_TO_VALIDATE
 
@@ -62,8 +62,14 @@ def load_model_and_config(model_path):
 
     if cfg.MODEL_TYPE == 'DFM_FNCN':
         model = FullModel().to(cfg.DEVICE)
-    else:
+    elif cfg.MODEL_TYPE == 'TRADITIONAL_CNN':
         model = TraditionalCNNModel().to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'PLANTNET_ANFIS':
+        model = PlantNetANFIS(num_classes=cfg.N_CLASSES, use_fuzzy_layer=True, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'PLANTNET_SIMPLE':
+        model = PlantNetSimple(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    else:
+        raise ValueError(f"未知的 MODEL_TYPE: {cfg.MODEL_TYPE}")
 
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
