@@ -107,6 +107,80 @@ def get_extractor():
 # =========================================================================
 # 模型 1: DFM-FNCN (论文复现 + Attention 改进)
 # =========================================================================
+
+
+# =========================================================================
+# CBAM 注意力模块
+# =========================================================================
+class ChannelAttention(nn.Module):
+    """CBAM 通道注意力模块"""
+    def __init__(self, channels, reduction=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # 共享 MLP
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, 1, bias=False)
+        )
+        
+    def forward(self, x):
+        avg_out = self.mlp(self.avg_pool(x))
+        max_out = self.mlp(self.max_pool(x))
+        return torch.sigmoid(avg_out + max_out)
+
+
+class SpatialAttention(nn.Module):
+    """CBAM 空间注意力模块"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        return torch.sigmoid(self.conv(x_cat))
+
+
+class CBAM(nn.Module):
+    """CBAM: Convolutional Block Attention Module
+    结合通道注意力和空间注意力"""
+    def __init__(self, channels, reduction=16, kernel_size=7):
+        super(CBAM, self).__init__()
+        self.channel_attention = ChannelAttention(channels, reduction)
+        self.spatial_attention = SpatialAttention(kernel_size)
+        
+    def forward(self, x):
+        # 通道注意力
+        x = x * self.channel_attention(x)
+        # 空间注意力
+        x = x * self.spatial_attention(x)
+        return x
+
+
+class SEAttention(nn.Module):
+    """SE (Squeeze-and-Excitation) 注意力模块"""
+    def __init__(self, channels, reduction=16):
+        super(SEAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
 class Dynamic_DFM_FNCN(nn.Module):
     def __init__(self, n_channels, p_dim, n_classes, max_rules=cfg.MAX_RULES, phi_th=cfg.PHI_TH):
         super(Dynamic_DFM_FNCN, self).__init__()
@@ -122,10 +196,24 @@ class Dynamic_DFM_FNCN(nn.Module):
 
         # [创新点 1] Attention 参数
         if cfg.USE_ATTENTION:
-            # 初始化为 0 -> Softmax 后为均匀分布 (1/N)
-            self.alpha = nn.Parameter(torch.zeros(max_rules, n_channels))
+            if cfg.ATTENTION_TYPE == 'CBAM':
+                # CBAM 注意力模块 - 用于特征提取器
+                self.cbam_attention = CBAM(n_channels, reduction=cfg.CBAM_REDUCTION, kernel_size=cfg.CBAM_KERNEL_SIZE)
+                # 规则级别的注意力权重 (alpha)
+                self.alpha = nn.Parameter(torch.zeros(max_rules, n_channels))
+            elif cfg.ATTENTION_TYPE == 'SE':
+                # SE 注意力模块
+                self.se_attention = SEAttention(n_channels, reduction=cfg.CBAM_REDUCTION)
+                self.alpha = nn.Parameter(torch.zeros(max_rules, n_channels))
+            else:
+                # 原始简单注意力
+                self.cbam_attention = None
+                self.se_attention = None
+                self.alpha = nn.Parameter(torch.zeros(max_rules, n_channels))
         else:
             self.register_parameter('alpha', None)
+            self.cbam_attention = None
+            self.se_attention = None
 
     def forward(self, x, labels=None, training_phase=False):
         # [修改] 强制使用 float32/float64 避免下溢，并使用 torch.amp.autocast
@@ -133,6 +221,13 @@ class Dynamic_DFM_FNCN(nn.Module):
             x = x.to(torch.float32)
             b = x.size(0)
             x = self.bn(x)
+            
+            # [CBAM 注意力] 在 BN 后应用注意力机制
+            if cfg.USE_ATTENTION and cfg.ATTENTION_TYPE == 'CBAM' and self.cbam_attention is not None:
+                x = self.cbam_attention(x)
+            elif cfg.USE_ATTENTION and cfg.ATTENTION_TYPE == 'SE' and self.se_attention is not None:
+                x = self.se_attention(x)
+            
             x_flat = x.view(b, self.n_channels, -1)
 
             active_rules_count = self.num_active_rules.item() # type: ignore
@@ -201,6 +296,13 @@ class Dynamic_DFM_FNCN(nn.Module):
             x = x.to(torch.float32)
             b = x.size(0)
             x = self.bn(x)
+            
+            # [CBAM 注意力] 在 BN 后应用注意力机制
+            if cfg.USE_ATTENTION and cfg.ATTENTION_TYPE == 'CBAM' and self.cbam_attention is not None:
+                x = self.cbam_attention(x)
+            elif cfg.USE_ATTENTION and cfg.ATTENTION_TYPE == 'SE' and self.se_attention is not None:
+                x = self.se_attention(x)
+            
             x_flat = x.view(b, self.n_channels, -1)
 
             active_rules_count = self.num_active_rules.item() # type: ignore
@@ -866,3 +968,507 @@ def get_plantnet_model(model_type='ANFIS', num_classes=None, in_channels=3):
         return PlantNetSimple(num_classes=num_classes, in_channels=in_channels)
     else:
         raise ValueError(f"Unknown PlantNet model type: {model_type}")
+
+
+# =========================================================================
+# OsteoNet 对比算法 (复现 Abed et al., 2025 论文中的 Fuzzy CNN 模型)
+# =========================================================================
+
+class FuzzyContrastEnhancement(nn.Module):
+    """
+    [顺序架构第一步] 模糊逻辑预处理层 (Fuzzy Preprocessing Layer)
+    
+    复现论文中的 "Fuzzy Logic Preprocessing" 阶段。
+    主要通过模糊集合理论增强图像的对比度，突出细节。
+    
+    算法流程:
+    1. 图像归一化 (Normalization)
+    2. 模糊化 (Fuzzification): 将像素值映射为隶属度。
+    3. 强化算子 (Intensification): 使用 INT 算子拉伸对比度。
+    4. 去模糊化 (Defuzzification): 映射回像素空间。
+    """
+    def __init__(self, crossover_point=0.5):
+        super(FuzzyContrastEnhancement, self).__init__()
+        self.crossover_point = crossover_point  # 模糊过渡点，通常为0.5
+
+    def intensification_operator(self, mu):
+        """
+        模糊强化算子 (Intensification Operator).
+        逻辑: 
+        - 如果隶属度 < 0.5 (暗部)，则使其更暗。
+        - 如果隶属度 > 0.5 (亮部)，则使其更亮。
+        公式:
+        mu_new = 2 * mu^2             if 0 <= mu <= 0.5
+        mu_new = 1 - 2 * (1 - mu)^2   if 0.5 < mu <= 1
+        """
+        # 使用 torch.where 实现分段函数，保持 GPU 加速能力
+        mu_new = torch.where(
+            mu <= 0.5,
+            2 * torch.pow(mu, 2),
+            1 - 2 * torch.pow(1 - mu, 2)
+        )
+        return mu_new
+
+    def forward(self, img_tensor):
+        """
+        Args:
+            img_tensor: 输入图像张量 [Batch, Channels, Height, Width], 值域通常在 [0, 1] 或 [0, 255]
+        """
+        # 1. 确保输入在 [0, 1] 范围
+        if img_tensor.max() > 1.0:
+            x = img_tensor / 255.0
+        else:
+            x = img_tensor
+
+        # 2. Fuzzification (模糊化)
+        # 对于灰度图像，像素亮度即代表"明亮程度"的隶属度
+        # 对于彩色图像，取 RGB 平均值作为亮度
+        if x.shape[1] == 3:
+            # 彩色图像：转换为灰度亮度
+            mu = 0.299 * x[:, 0:1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+        else:
+            # 单通道图像：直接使用
+            mu = x
+
+        # 3. Fuzzy Intensification (模糊强化)
+        mu_enhanced = self.intensification_operator(mu)
+        
+        # 4. Defuzzification (去模糊化)
+        # 将增强后的亮度映射回所有通道
+        if x.shape[1] == 3:
+            out = torch.cat([mu_enhanced, mu_enhanced, mu_enhanced], dim=1)
+        else:
+            out = mu_enhanced
+
+        return out
+
+
+class OsteoNet(nn.Module):
+    """
+    [顺序架构第二步] 深度卷积网络后端 (Deep CNN Back-end)
+    
+    复现论文 Abed et al., 2025 中的 OsteoNet 模型。
+    架构: Fuzzy Preprocessing + CNN Backbone
+    
+    支持的骨干网络: 'resnet18', 'resnet50', 'mobilenet_v2', 'alexnet'
+    """
+    def __init__(self, model_name='resnet18', num_classes=None, pretrained=True):
+        super(OsteoNet, self).__init__()
+        
+        # 使用传入的 num_classes 或从配置中获取
+        num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
+        self.model_name = model_name.lower()
+        
+        # 1. 初始化预处理层 (The Sequential Fuzzy Front-end)
+        self.fuzzy_preprocess = FuzzyContrastEnhancement()
+
+        # 2. 加载预训练骨干网络 (The Deep Back-end)
+        if 'resnet' in self.model_name:
+            if self.model_name == 'resnet18':
+                weights = models.ResNet18_Weights.DEFAULT if pretrained else None
+                self.backbone = models.resnet18(weights=weights)
+            elif self.model_name == 'resnet50':
+                weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+                self.backbone = models.resnet50(weights=weights)
+            else:
+                weights = models.ResNet18_Weights.DEFAULT if pretrained else None
+                self.backbone = models.resnet18(weights=weights)
+            
+            # 修改首层以适应单通道输入
+            if cfg.IN_CHANNELS == 1:
+                original_conv = self.backbone.conv1
+                self.backbone.conv1 = nn.Conv2d(
+                    1, 64, kernel_size=original_conv.kernel_size, 
+                    stride=original_conv.stride, padding=original_conv.padding, bias=False
+                )
+            elif cfg.IN_CHANNELS != 3:
+                self.backbone.conv1 = nn.Conv2d(
+                    cfg.IN_CHANNELS, 64, kernel_size=7, stride=2, padding=3, bias=False
+                )
+            
+            in_features = self.backbone.fc.in_features
+            self.backbone.fc = nn.Linear(in_features, num_classes)
+            
+        elif 'mobilenet' in self.model_name:
+            weights = models.MobileNet_V2_Weights.DEFAULT if pretrained else None
+            self.backbone = models.mobilenet_v2(weights=weights)
+            
+            # 修改首层以适应单通道输入
+            if cfg.IN_CHANNELS == 1:
+                # MobileNetV2 的第一个层是 InvertedResidual，我们需要修改它的第一个卷积层
+                # 获取原始层的参数
+                orig_conv = self.backbone.features[0][0]  # type: ignore
+                new_first_conv = nn.Conv2d(
+                    1, 32, kernel_size=orig_conv.kernel_size,
+                    stride=orig_conv.stride, padding=orig_conv.padding, bias=False
+                )
+                # 直接替换 (PyTorch 支持这种动态替换)
+                self.backbone.features[0][0] = new_first_conv  # type: ignore
+            elif cfg.IN_CHANNELS != 3:
+                orig_conv = self.backbone.features[0][0]  # type: ignore
+                new_first_conv = nn.Conv2d(
+                    cfg.IN_CHANNELS, 32, kernel_size=orig_conv.kernel_size,
+                    stride=orig_conv.stride, padding=orig_conv.padding, bias=False
+                )
+                self.backbone.features[0][0] = new_first_conv  # type: ignore
+            
+            in_features = self.backbone.classifier[1].in_features
+            self.backbone.classifier[1] = nn.Linear(in_features, num_classes)
+            
+        elif 'alexnet' in self.model_name:
+            weights = models.AlexNet_Weights.DEFAULT if pretrained else None
+            self.backbone = models.alexnet(weights=weights)
+            
+            # 修改首层以适应单通道输入
+            if cfg.IN_CHANNELS != 3:
+                first_conv_config = {
+                    'in_channels': cfg.IN_CHANNELS,
+                    'out_channels': 64,
+                    'kernel_size': 11,
+                    'stride': 4,
+                    'padding': 2  # 添加 padding 确保输出尺寸
+                }
+                self.backbone.features[0] = nn.Conv2d(**first_conv_config)
+            
+            # 修改最后一个 MaxPool2d 层，添加 padding 以适应小尺寸输入
+            self.backbone.features[2] = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+            
+            # 使用 AdaptiveAvgPool2d(1, 1) 确保任何输入尺寸都能产生 1x1 输出
+            self.backbone.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+            
+            # 获取原始 classifier 的输入特征数
+            with torch.no_grad():
+                dummy = torch.randn(1, cfg.IN_CHANNELS if cfg.IN_CHANNELS != 3 else 3, 
+                                   cfg.TARGET_SIZE[0], cfg.TARGET_SIZE[1])
+                # 先经过特征提取
+                x = self.backbone.features(dummy)
+                # 经过 avgpool
+                x = self.backbone.avgpool(x)
+                in_features = x.shape[1]
+            
+            # 重建 classifier
+            self.backbone.classifier = nn.Sequential(
+                nn.Dropout(0.5),
+                nn.Linear(in_features, 256),
+                nn.ReLU(inplace=True),
+                nn.Dropout(0.5),
+                nn.Linear(256, num_classes)
+            )
+            
+        else:
+            raise ValueError(f"Model {model_name} not supported. Choose from: resnet18, resnet50, mobilenet_v2, alexnet")
+
+    def forward(self, x):
+        """
+        Args:
+            x: 输入图像张量 [Batch, Channels, Height, Width]
+        
+        Returns:
+            logits: 分类 logits
+            enhanced_img: 模糊增强后的图像 (用于可视化)
+        """
+        # --- Stage 1: Fuzzy Preprocessing ---
+        # 图像先经过模糊逻辑层处理，增强特征
+        x_enhanced = self.fuzzy_preprocess(x)
+        
+        # --- Stage 2: Deep Learning Classification ---
+        # 增强后的图像输入 CNN
+        logits = self.backbone(x_enhanced)
+        
+        return logits, x_enhanced
+
+
+class OsteoNetSimple(nn.Module):
+    """
+    OsteoNet 简化版对比算法
+    
+    使用轻量级的自定义 CNN 作为骨干网络，适合小规模数据集和快速实验。
+    保持 Fuzzy Preprocessing 层，移除预训练模型。
+    """
+    def __init__(self, num_classes=None, in_channels=3):
+        super(OsteoNetSimple, self).__init__()
+        
+        num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
+        
+        # Fuzzy Preprocessing Layer
+        self.fuzzy_preprocess = FuzzyContrastEnhancement()
+        
+        # Custom CNN Backbone (轻量级)
+        # 输入尺寸: 28x28 -> 经过 3 个 MaxPool 后: 3x3
+        self.backbone = nn.Sequential(
+            # Block 1: 28x28 -> 14x14
+            nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            # Block 2: 14x14 -> 7x7
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            # Block 3: 7x7 -> 3x3
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            # Global Average Pooling
+            nn.AdaptiveAvgPool2d((1, 1)),
+            
+            # Classifier
+            nn.Flatten(),
+            nn.Dropout(0.5),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(64, num_classes)
+        )
+    
+    def forward(self, x):
+        """
+        Args:
+            x: 输入图像张量 [Batch, Channels, Height, Width]
+        
+        Returns:
+            logits: 分类 logits
+            enhanced_img: 模糊增强后的图像 (用于可视化)
+        """
+        # Stage 1: Fuzzy Preprocessing
+        x_enhanced = self.fuzzy_preprocess(x)
+        
+        # Stage 2: Classification
+        logits = self.backbone(x_enhanced)
+        
+        return logits, x_enhanced
+
+
+def get_osteonet_model(model_type='resnet18', num_classes=None, pretrained=True):
+    """
+    获取 OsteoNet 模型实例
+    
+    Args:
+        model_type: 'resnet18' - ResNet18 预训练骨干
+                    'resnet50' - ResNet50 预训练骨干
+                    'mobilenet_v2' - MobileNetV2 预训练骨干
+                    'alexnet' - AlexNet 预训练骨干
+                    'simple' - 自定义轻量级 CNN 骨干
+        num_classes: 分类数量
+        pretrained: 是否使用预训练权重
+    
+    Returns:
+        OsteoNet 模型实例
+    """
+    if model_type == 'simple':
+        return OsteoNetSimple(num_classes=num_classes, in_channels=cfg.IN_CHANNELS)
+    else:
+        return OsteoNet(model_name=model_type, num_classes=num_classes, pretrained=pretrained)
+
+
+# =========================================================================
+# HP-FCNN 对比算法 (复现 Iqbal et al., 2024 IEEE Trans. Fuzzy Systems)
+# =========================================================================
+
+class FuzzyLayer(nn.Module):
+    """
+    可学习的模糊层 (Learnable Fuzzy Layer)
+    作用: 将输入特征映射到模糊隶属度空间，捕捉数据的不确定性。
+    实现: 采用高斯隶属函数 (Gaussian Membership Function)。
+    """
+    def __init__(self, in_channels, num_fuzzy_sets):
+        super(FuzzyLayer, self).__init__()
+        self.num_fuzzy_sets = num_fuzzy_sets
+        self.in_channels = in_channels
+
+        # 初始化高斯函数的中心 (Centers) 和 宽度 (Sigmas)
+        # 形状: (1, in_channels, num_fuzzy_sets, 1, 1) 以便广播到图像空间
+        self.centers = nn.Parameter(torch.rand(1, in_channels, num_fuzzy_sets, 1, 1))
+        self.sigmas = nn.Parameter(torch.ones(1, in_channels, num_fuzzy_sets, 1, 1))
+
+    def forward(self, x):
+        """
+        x: (Batch, C, H, W)
+        Return: (Batch, C * Num_Fuzzy_Sets, H, W)
+        """
+        B, C, H, W = x.shape
+        
+        # 扩展 x 以匹配模糊集的维度: (B, C, 1, H, W)
+        x_expanded = x.unsqueeze(2)
+        
+        # 计算高斯隶属度: exp(- (x - c)^2 / (2 * sigma^2))
+        # 结果形状: (B, C, Num_Rules, H, W)
+        numerator = (x_expanded - self.centers) ** 2
+        denominator = 2 * (self.sigmas ** 2) + 1e-8 # 加极小值防止除零
+        membership = torch.exp(-numerator / denominator)
+        
+        # 将模糊集维度合并到通道维度，以便后续卷积处理
+        # (B, C * Num_Rules, H, W)
+        membership = membership.view(B, C * self.num_fuzzy_sets, H, W)
+        
+        return membership
+
+
+class HP_FCNN(nn.Module):
+    """
+    Hybrid Parallel Fuzzy CNN (HP-FCNN)
+    复现对象: Iqbal et al. (2024) IEEE Trans. Fuzzy Systems
+    架构特点:
+      - Branch A: Deep Crisp CNN (提取纹理、边缘等清晰特征)
+      - Branch B: Parallel Fuzzy Stream (提取模糊特征，处理边界不确定性)
+      - Fusion: 特征级拼接融合 (Concatenation)
+    """
+    def __init__(self, num_classes=None, in_channels=3):
+        super(HP_FCNN, self).__init__()
+        
+        # 使用传入的 num_classes 或从配置中获取
+        num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
+        
+        # ---------------------------
+        # 分支 A: 清晰卷积流 (Crisp CNN Stream)
+        # ---------------------------
+        self.crisp_stream = nn.Sequential(
+            # Block 1
+            nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2), # /2
+            
+            # Block 2
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2), # /4
+            
+            # Block 3
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2)  # /8
+        )
+        
+        # ---------------------------
+        # 分支 B: 模糊流 (Fuzzy Stream)
+        # ---------------------------
+        # 这里的逻辑是：先通过模糊层提取隶属度，再通过卷积层聚合模糊信息
+        self.fuzzy_in_channels = 32 # 假设我们在第一层卷积后分叉
+        self.pre_fuzzy_conv = nn.Sequential(
+            nn.Conv2d(in_channels, self.fuzzy_in_channels, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        
+        self.fuzzy_sets = 4 # 每个通道定义4个模糊语义 (如: Low, Med-Low, Med-High, High)
+        self.fuzzy_layer = FuzzyLayer(self.fuzzy_in_channels, self.fuzzy_sets)
+        
+        # 模糊特征聚合层 (将膨胀的模糊通道压缩回来)
+        self.fuzzy_stream_conv = nn.Sequential(
+            # 输入通道变大了 (Channel * Fuzzy_Sets)
+            nn.Conv2d(self.fuzzy_in_channels * self.fuzzy_sets, 64, kernel_size=1), 
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2), # /2
+            
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2), # /4
+            
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2)  # /8
+        )
+
+        # ---------------------------
+        # 融合与分类 (Fusion & Classifier)
+        # ---------------------------
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        # 融合后的维度 = Crisp输出通道(128) + Fuzzy输出通道(128)
+        self.fusion_dim = 128 + 128 
+        
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.fusion_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        # --- 分支 A: Crisp Path ---
+        crisp_feat = self.crisp_stream(x)
+        
+        # --- 分支 B: Fuzzy Path ---
+        # 1. 预处理
+        x_fuzzy_pre = self.pre_fuzzy_conv(x)
+        # 2. 模糊化 (Fuzzification) - 核心并行步骤
+        x_fuzzy_membership = self.fuzzy_layer(x_fuzzy_pre)
+        # 3. 模糊特征提取
+        fuzzy_feat = self.fuzzy_stream_conv(x_fuzzy_membership)
+        
+        # --- 融合 (Fusion) ---
+        # 确保两个分支的空间维度一致
+        if crisp_feat.shape[2:] != fuzzy_feat.shape[2:]:
+            fuzzy_feat = F.interpolate(fuzzy_feat, size=crisp_feat.shape[2:])
+            
+        # 拼接 (Concatenate)
+        combined_feat = torch.cat([crisp_feat, fuzzy_feat], dim=1)
+        
+        # 全局池化
+        pooled_feat = self.global_pool(combined_feat)
+        
+        # 分类
+        logits = self.classifier(pooled_feat)
+        
+        return logits
+
+
+def get_hpfcnn_model(num_classes=None, in_channels=3):
+    """
+    获取 HP-FCNN 模型实例
+    
+    Args:
+        num_classes: 分类数量
+        in_channels: 输入通道数
+    
+    Returns:
+        HP_FCNN 模型实例
+    """
+    return HP_FCNN(num_classes=num_classes, in_channels=in_channels)
+
+
+# =========================================================================
+# 模型工厂函数 (Model Factory)
+# =========================================================================
+
+def get_model(model_type=None, num_classes=None, in_channels=3):
+    """
+    获取模型实例的工厂函数
+    
+    Args:
+        model_type: 模型类型，如果不提供则使用配置中的 MODEL_TYPE
+        num_classes: 分类数量
+        in_channels: 输入通道数
+    
+    Returns:
+        模型实例
+    """
+    if model_type is None:
+        model_type = cfg.MODEL_TYPE
+    
+    if model_type == 'DFM_FNCN':
+        return FullModel()
+    elif model_type == 'TRADITIONAL_CNN':
+        return TraditionalCNNModel()
+    elif model_type == 'PLANTNET_ANFIS':
+        return get_plantnet_model('ANFIS', num_classes=num_classes, in_channels=in_channels)
+    elif model_type == 'PLANTNET_SIMPLE':
+        return get_plantnet_model('SIMPLE', num_classes=num_classes, in_channels=in_channels)
+    elif model_type == 'OSTEONET':
+        return get_osteonet_model('resnet18', num_classes=num_classes)
+    elif model_type == 'HP_FCNN':
+        return get_hpfcnn_model(num_classes=num_classes, in_channels=in_channels)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")

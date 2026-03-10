@@ -23,7 +23,7 @@ from sklearn.cluster import MiniBatchKMeans
 import logging  # 新增：导入日志模块
 
 import config as cfg
-from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple
+from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple, OsteoNet, OsteoNetSimple, get_osteonet_model, HP_FCNN, get_hpfcnn_model
 
 CLASS_NAMES = cfg.CLASS_NAMES
 
@@ -530,6 +530,12 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, lo
         with autocast(device_type=cfg.DEVICE.type, enabled=(cfg.DEVICE.type == 'cuda')):
             if cfg.MODEL_TYPE == 'DFM_FNCN':
                 output = model(data, labels=target, training_phase=True)
+            elif cfg.MODEL_TYPE == 'OSTEONET':
+                logits, _ = model(data)
+                output = logits
+            elif cfg.MODEL_TYPE == 'HP_FCNN':
+                # HP-FCNN 直接返回 logits
+                output = model(data)
             else:
                 output = model(data)
             loss = criterion(output, target)
@@ -579,6 +585,12 @@ def evaluate(model, test_loader, criterion, logger=None):
             with autocast(device_type=cfg.DEVICE.type, enabled=(cfg.DEVICE.type == 'cuda')):
                 if cfg.MODEL_TYPE == 'DFM_FNCN':
                     output = model(data, labels=target, training_phase=False)
+                elif cfg.MODEL_TYPE == 'OSTEONET':
+                    logits, _ = model(data)
+                    output = logits
+                elif cfg.MODEL_TYPE == 'HP_FCNN':
+                    # HP-FCNN 直接返回 logits
+                    output = model(data)
                 else:
                     output = model(data)
                 loss = criterion(output, target)
@@ -782,6 +794,12 @@ def run_training():
         model = PlantNetANFIS(num_classes=cfg.N_CLASSES, use_fuzzy_layer=True, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
     elif cfg.MODEL_TYPE == 'PLANTNET_SIMPLE':
         model = PlantNetSimple(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'OSTEONET':
+        # OsteoNet: 顺序架构模糊 CNN，使用预训练的 ResNet18 作为骨干
+        model = OsteoNet(model_name='resnet18', num_classes=cfg.N_CLASSES, pretrained=True).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'HP_FCNN':
+        # HP-FCNN: 并行架构模糊 CNN (Iqbal et al., 2024)
+        model = HP_FCNN(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
     else: 
         raise ValueError(f"未知的 MODEL_TYPE: {cfg.MODEL_TYPE}")
 

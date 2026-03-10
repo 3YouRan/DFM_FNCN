@@ -14,6 +14,134 @@ from models import FullModel
 import medmnist
 from medmnist import BloodMNIST
 
+
+# =========================================================================
+# CBAM 注意力模块 (用于解码器)
+# =========================================================================
+class ChannelAttention(nn.Module):
+    """CBAM 通道注意力模块"""
+    def __init__(self, channels, reduction=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # 共享 MLP
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, 1, bias=False)
+        )
+        
+    def forward(self, x):
+        avg_out = self.mlp(self.avg_pool(x))
+        max_out = self.mlp(self.max_pool(x))
+        return torch.sigmoid(avg_out + max_out)
+
+
+class SpatialAttention(nn.Module):
+    """CBAM 空间注意力模块"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        return torch.sigmoid(self.conv(x_cat))
+
+
+# =========================================================================
+# CBAM 注意力模块 (用于解码器)
+# =========================================================================
+class ChannelAttention(nn.Module):
+    """CBAM 通道注意力模块"""
+    def __init__(self, channels, reduction=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # 共享 MLP
+        self.mlp = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, 1, bias=False)
+        )
+        
+    def forward(self, x):
+        avg_out = self.mlp(self.avg_pool(x))
+        max_out = self.mlp(self.max_pool(x))
+        return torch.sigmoid(avg_out + max_out)
+
+
+class SpatialAttention(nn.Module):
+    """CBAM 空间注意力模块"""
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        return torch.sigmoid(self.conv(x_cat))
+
+
+class CBAMDecoder(nn.Module):
+    """CBAM 注意力引导解码器：结合通道注意力和空间注意力"""
+    def __init__(self, base_decoder_class, reduction=16, kernel_size=7):
+        super(CBAMDecoder, self).__init__()
+        self.base_decoder = base_decoder_class()
+        
+        # CBAM 注意力模块
+        self.channel_attention = ChannelAttention(cfg.N_CHANNELS_OUT, reduction)
+        self.spatial_attention = SpatialAttention(kernel_size)
+        
+        # 规则注意力投影层 (用于规则级别的注意力权重)
+        self.rule_attention_projection = nn.Sequential(
+            nn.Linear(cfg.N_CHANNELS_OUT, cfg.N_CHANNELS_OUT),
+            nn.ReLU(inplace=True),
+            nn.Linear(cfg.N_CHANNELS_OUT, cfg.N_CHANNELS_OUT)
+        )
+        
+    def forward(self, x, attention_weights=None):
+        """
+        x: 规则中心特征图 (B, C, H, W)
+        attention_weights: 规则级别的注意力权重 (B, C) 或 None
+        """
+        # 首先应用 CBAM 注意力
+        x = self._apply_cbam(x)
+        
+        # 然后应用规则级别的注意力引导 (如果提供)
+        if attention_weights is not None and cfg.USE_ATTENTION_GUIDED_DECODER:
+            x = self._apply_rule_attention(x, attention_weights)
+        
+        # 通过基础解码器
+        return self.base_decoder(x)
+    
+    def _apply_cbam(self, x):
+        """应用 CBAM 注意力"""
+        # 通道注意力
+        x = x * self.channel_attention(x)
+        # 空间注意力
+        x = x * self.spatial_attention(x)
+        return x
+    
+    def _apply_rule_attention(self, x, attention_weights):
+        """应用规则级别的注意力权重"""
+        # 将注意力权重投影到特征维度
+        att_projected = self.rule_attention_projection(attention_weights)
+        
+        # 扩展到特征图维度
+        B, C, H, W = x.shape
+        att_expanded = att_projected.view(B, C, 1, 1).expand(-1, -1, H, W)
+        
+        # 调制特征
+        modulated = x * (1 + cfg.ATTENTION_GUIDED_DECODER_WEIGHT * att_expanded)
+        return modulated
+
 # [新增] 导入混合精度训练模块
 try:
     from torch.cuda.amp import  GradScaler,autocast 
@@ -539,6 +667,10 @@ def get_decoder():
         decoder_info_str = f"  Adversarial Weight: {cfg.GAN_ADVERSARIAL_WEIGHT}"
         if cfg.GAN_USE_LSGAN:
             decoder_info_str += ", 损失: LSGAN"
+    elif cfg.USE_ATTENTION_GUIDED_DECODER and hasattr(cfg, 'ATTENTION_TYPE') and cfg.ATTENTION_TYPE == 'CBAM':
+        # CBAM 解码器
+        decoder_type = "CBAM注意力解码器"
+        decoder_info_str = f"  CBAM Reduction: {cfg.CBAM_REDUCTION}, Kernel Size: {cfg.CBAM_KERNEL_SIZE}"
     elif cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
         decoder_type = "注意力引导多尺度解码器"
         decoder_info_str = f"  权重: {cfg.MULTI_SCALE_WEIGHTS}"
@@ -558,10 +690,19 @@ def get_decoder():
     if cfg.USE_ATTENTION_GUIDED_DECODER and not cfg.USE_ATTENTION:
         print("  警告: 解码器已启用注意力引导，但模型未使用注意力机制")
 
-    return GANDecoder(base_class) if cfg.USE_GAN_DECODER else (
-        AttentionGuidedMultiScaleDecoder(base_class) if (cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER) else (
-        MultiScaleDecoder(base_class) if cfg.USE_MULTI_SCALE_VISUALIZATION else (
-        AttentionGuidedDecoder(base_class) if cfg.USE_ATTENTION_GUIDED_DECODER else base_class())))
+    # 返回相应的解码器
+    if cfg.USE_GAN_DECODER:
+        return GANDecoder(base_class)
+    elif cfg.USE_ATTENTION_GUIDED_DECODER and hasattr(cfg, 'ATTENTION_TYPE') and cfg.ATTENTION_TYPE == 'CBAM':
+        return CBAMDecoder(base_class, reduction=cfg.CBAM_REDUCTION, kernel_size=cfg.CBAM_KERNEL_SIZE)
+    elif cfg.USE_MULTI_SCALE_VISUALIZATION and cfg.USE_ATTENTION_GUIDED_DECODER:
+        return AttentionGuidedMultiScaleDecoder(base_class)
+    elif cfg.USE_MULTI_SCALE_VISUALIZATION:
+        return MultiScaleDecoder(base_class)
+    elif cfg.USE_ATTENTION_GUIDED_DECODER:
+        return AttentionGuidedDecoder(base_class)
+    else:
+        return base_class()
 class Autoencoder(nn.Module):
     def __init__(self, encoder):
         super(Autoencoder, self).__init__()
@@ -1107,7 +1248,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'checkpoints\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260130_151401'
+    TEST_DIR = 'record\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260305_223501'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

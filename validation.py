@@ -15,7 +15,7 @@ import medmnist
 from medmnist import BloodMNIST
 
 import config as cfg
-from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple
+from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple, OsteoNet, OsteoNetSimple, HP_FCNN
 
 # 移除硬编码的 RUN_DIR_TO_VALIDATE
 
@@ -68,6 +68,12 @@ def load_model_and_config(model_path):
         model = PlantNetANFIS(num_classes=cfg.N_CLASSES, use_fuzzy_layer=True, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
     elif cfg.MODEL_TYPE == 'PLANTNET_SIMPLE':
         model = PlantNetSimple(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'OSTEONET':
+        # OsteoNet: 顺序架构模糊 CNN，使用预训练的 ResNet18 作为骨干
+        model = OsteoNet(model_name='resnet18', num_classes=cfg.N_CLASSES, pretrained=True).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'HP_FCNN':
+        # HP-FCNN: 并行架构模糊 CNN (Iqbal et al., 2024)
+        model = HP_FCNN(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
     else:
         raise ValueError(f"未知的 MODEL_TYPE: {cfg.MODEL_TYPE}")
 
@@ -212,6 +218,12 @@ def run_inference(model, loader):
 
             if cfg.MODEL_TYPE == 'DFM_FNCN':
                 outputs = model(data, labels=None, training_phase=False)
+            elif cfg.MODEL_TYPE == 'OSTEONET':
+                logits, _ = model(data)
+                outputs = logits
+            elif cfg.MODEL_TYPE == 'HP_FCNN':
+                # HP-FCNN 直接返回 logits
+                outputs = model(data)
             else:
                 outputs = model(data)
 
@@ -266,7 +278,7 @@ def run_validation(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试，需手动指定路径
-    TEST_DIR = 'checkpoints/VEHICLES_DFM_FNCN_RESNET18_PRETRAINED_20260102_185802'
+    TEST_DIR = 'checkpoints\\SHAPES_CLASSIFICATION_HP_FCNN_RESNET18_PRETRAINED_20260210_205611'
     if os.path.exists(TEST_DIR):
         run_validation(TEST_DIR)
     else:
