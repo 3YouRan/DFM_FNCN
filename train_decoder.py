@@ -154,7 +154,7 @@ except ImportError:
 
 DECODER_EPOCHS = 300
 DECODER_LR = 0.001
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 
 def configure_model_from_checkpoint(checkpoint):
     """[新] 从检查点中的 'config_params' 推断配置"""
@@ -1248,7 +1248,7 @@ def run_decoder_training(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'record\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260305_223501'
+    TEST_DIR = 'record\\GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20260408_182253'
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

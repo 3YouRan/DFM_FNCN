@@ -278,7 +278,7 @@ def run_validation(run_dir):
 
 if __name__ == '__main__':
     # 仅用于单独测试，需手动指定路径
-    TEST_DIR = 'checkpoints\\SHAPES_CLASSIFICATION_HP_FCNN_RESNET18_PRETRAINED_20260210_205611'
+    TEST_DIR = 'checkpoints\\BLOOD_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260313_160119'
     if os.path.exists(TEST_DIR):
         run_validation(TEST_DIR)
     else:

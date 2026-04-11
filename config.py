@@ -7,14 +7,14 @@ import medmnist
 # ==========================================
 # 选择要使用的数据集
 # 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES', 'SHAPES_CLASSIFICATION'
-DATASET_NAME = 'SHAPES_CLASSIFICATION'
+DATASET_NAME = 'GTSRB'
 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
 # 如果为列表: 仅使用列表中的类别索引 (例如 [0, 1, 2] 只训练前三类)
 # 这对于快速验证或专注于特定交通标志非常有用
-GTSRB_SUBSET_INDICES = [12,13, 14, 15,17, 33, 34, 35,36,37,38,39,40]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
-# GTSRB_SUBSET_INDICES = None  # 示例: Stop, No Entry, Turn Right, Turn Left, Ahead Only
+# GTSRB_SUBSET_INDICES = [12,13, 14, 15,17, 33, 34, 35,36,37,38,39,40]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
+GTSRB_SUBSET_INDICES = None  # 示例: Stop, No Entry, Turn Right, Turn Left, Ahead Only
 
 # [CIFAR100 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 100 个类别
@@ -185,7 +185,7 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # ==========================================
 # 3. 全局训练配置   /*
 # ==========================================
-BATCH_SIZE = 8
+BATCH_SIZE = 2
 EPOCHS = 150
 LR = 0.0001
 SEED = 42
@@ -194,21 +194,21 @@ DATA_ROOT = './data'
 # ==========================================
 # 4. DFM-FNCN 模糊模型特定配置
 # ==========================================
-MAX_RULES = 200
+MAX_RULES = 300
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = 2.8625185805493937e-20
-INIT_SIGMA = 1.05
+PHI_TH = np.exp(-40)
+INIT_SIGMA = 1.2
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
-USE_ATTENTION = False
+USE_ATTENTION = True
 
 # CBAM 注意力机制配置
 # Attention type: 'SIMPLE' (原始alpha注意力), 'CBAM' (通道+空间注意力), 'SE' (Squeeze-Excitation)
 ATTENTION_TYPE = 'CBAM'
 # CBAM 通道注意力配置
 CBAM_REDUCTION = 4  # 通道注意力中的降维比
-CBAM_KERNEL_SIZE = 7  # 空间注意力的卷积核大小
+CBAM_KERNEL_SIZE = 9  # 空间注意力的卷积核大小
 
 # ==========================================
 # 5. 传统 CNN 配置
@@ -220,9 +220,9 @@ CNN_DROPOUT = 0.5
 # 6. 特征提取器输出配置
 # ==========================================
 N_CHANNELS_OUT =128
-if DATASET_NAME == 'VEHICLES':
+if DATASET_NAME == 'VEHICLES'or DATASET_NAME == 'GTSRB':
     IMG_DIM_OUT = 15
-elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST' or DATASET_NAME == 'SHAPES_CLASSIFICATION' or DATASET_NAME == 'GTSRB':
+elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST' or DATASET_NAME == 'SHAPES_CLASSIFICATION' :
     IMG_DIM_OUT = 6
 else:
     IMG_DIM_OUT = 7
@@ -243,7 +243,7 @@ CLUSTERING_SAMPLE_LIMIT = 300000 # 用于聚类的样本数量限制 (避免内�
 # ==========================================
 # 9. [创新点 3] 学习算法创新 - 规则修剪
 # ==========================================
-USE_PRUNING = False          # 是否在训练结束后自动修剪无效规则
+USE_PRUNING = True          # 是否在训练结束后自动修剪无效规则
 # 修剪方法:
 # 'CONSEQUENT': 基于后件置信度 (如果规则对任何类别的预测概率都不高，则修剪)
 # 'ACTIVATION': 基于激活强度 (如果规则在测试集上的平均激活度极低，则修剪)
@@ -257,13 +257,13 @@ PRUNING_THRESHOLD = 0.5
 # ==========================================
 # 10. [创新点 4] 结构设计创新：注意力引导的解码器
 # ==========================================
-USE_ATTENTION_GUIDED_DECODER = False  # 是否使用注意力引导的解码器
+USE_ATTENTION_GUIDED_DECODER = True  # 是否使用注意力引导的解码器
 ATTENTION_GUIDED_DECODER_WEIGHT = 1  # 注意力调制强度 (0.0-1.0)
 
 # ==========================================
 # 11. [创新点 5] 结构设计创新：GAN解码器
 # ==========================================
-USE_GAN_DECODER = False  # 是否使用GAN作为解码器
+USE_GAN_DECODER = True  # 是否使用GAN作为解码器
 GAN_ADVERSARIAL_WEIGHT = 0.00001  # 对抗损失权重 (相对于重建损失)：
 # 如果生成的图像纹理乱七八糟但轮廓对，说明对抗权重太大，减小它。
 # 如果生成的图像依然模糊，说明对抗权重太小，增大它。
@@ -282,7 +282,7 @@ MULTI_SCALE_WEIGHTS = [0.3, 0.5, 0.2]  # 各尺度融合权重
 # ==========================================
 # 12. [创新点 6] 学习方法创新 - 动态规则融合
 # ==========================================
-USE_RULE_MERGING = False          # 是否启用动态规则融合
+USE_RULE_MERGING = True          # 是否启用动态规则融合
 # 融合方法:
 # 'SIMILARITY': 基于规则中心的相似度 (余弦相似度)
 # 'ACTIVATION_CORRELATION': 基于规则激活的相关性

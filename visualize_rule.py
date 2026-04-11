@@ -328,7 +328,7 @@ def visualize_single_scale_rules(model, decoder, run_dir, decoder_type='standard
         axes[i].axis('off')
         axes[i].set_visible(False)
 
-    plt.tight_layout(pad=2.0, h_pad=1.5, w_pad=1.5)
+    plt.tight_layout(pad=2.0, h_pad=2.5, w_pad=1.5)
 
     # 根据解码器类型选择保存路径
     if decoder_type == 'gan':
@@ -745,7 +745,10 @@ def run_visualization(run_dir, compare_decoders=True):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'record\\MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260305_223501'
+    TEST_DIR = 'record\\GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20260408_182253'
+    
+    
+    
     
 
     if os.path.exists(TEST_DIR):

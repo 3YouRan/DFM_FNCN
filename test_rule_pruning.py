@@ -28,7 +28,7 @@ def main():
     print(f"测试集批次数量: {len(test_loader)}")
     
     # 3. 加载预训练模型
-    checkpoint_path = "checkpoints/MIO_TCD_CLASSIFICATION_DFM_FNCN_RESNET18_PRETRAINED_20251231_101215/best_model.pth"
+    checkpoint_path = "checkpoints\\BLOOD_MNIST_DFM_FNCN_RESNET18_PRETRAINED_20260313_160119/best_model.pth"
     if not os.path.exists(checkpoint_path):
         print(f"错误: 检查点文件不存在: {checkpoint_path}")
         # 尝试查找其他检查点
@@ -55,7 +55,8 @@ def main():
     
     # 5. 执行规则修剪
     print("\n开始规则修剪...")
-    original, pruned = perform_rule_pruning(model, test_loader, logger=None)
+    original, pruned = perform_rule_pruning(model, test_loader, logger=None,pruning_method=cfg.PRUNING_METHOD, 
+                                            pruning_threshold=0.6)
     
     # 6. 验证结果
     num_rules_after = classifier.num_active_rules.item()
