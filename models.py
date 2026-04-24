@@ -201,6 +201,7 @@ class Dynamic_DFM_FNCN(nn.Module):
                 self.cbam_attention = CBAM(n_channels, reduction=cfg.CBAM_REDUCTION, kernel_size=cfg.CBAM_KERNEL_SIZE)
                 # 规则级别的注意力权重 (alpha)
                 self.alpha = nn.Parameter(torch.zeros(max_rules, n_channels))
+                # self.alpha = None
             elif cfg.ATTENTION_TYPE == 'SE':
                 # SE 注意力模块
                 self.se_attention = SEAttention(n_channels, reduction=cfg.CBAM_REDUCTION)

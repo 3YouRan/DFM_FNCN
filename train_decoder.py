@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import random
+import numpy as np
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 import os
@@ -153,8 +155,29 @@ except ImportError:
 # 移除硬编码的 RUN_DIR_TO_LOAD
 
 DECODER_EPOCHS = 300
-DECODER_LR = 0.001
+DECODER_LR = 0.0002
 BATCH_SIZE = 512
+
+def set_random_seed(seed):
+    """Set random seeds for reproducible decoder training."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    if hasattr(torch.backends, 'cudnn'):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception as e:
+        print(f"Warning: failed to enable deterministic algorithms: {e}")
+
+    print(f"Random seed fixed to {seed}")
 
 def configure_model_from_checkpoint(checkpoint):
     """[新] 从检查点中的 'config_params' 推断配置"""
@@ -847,8 +870,13 @@ def get_train_loader():
     else:
         raise ValueError(f"未知的 DATASET_NAME: {cfg.DATASET_NAME}")
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
-                              num_workers=0)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+        generator=torch.Generator().manual_seed(cfg.SEED)
+    )
     return train_loader
 
 
@@ -1143,6 +1171,7 @@ def run_decoder_training(run_dir):
     print(f"开始训练解码器（对比实验模式）")
     print(f"{'='*60}")
     
+    set_random_seed(cfg.SEED)
     total_start_time = time.time()
     
     model_path = os.path.join(run_dir, 'best_model.pth')
@@ -1249,6 +1278,7 @@ def run_decoder_training(run_dir):
 if __name__ == '__main__':
     # 仅用于单独测试
     TEST_DIR = 'record\\GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20260408_182253'
+    set_random_seed(cfg.SEED)
     if os.path.exists(TEST_DIR):
         run_decoder_training(TEST_DIR)
     else:

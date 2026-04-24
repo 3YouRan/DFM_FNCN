@@ -13,8 +13,8 @@ DATASET_NAME = 'GTSRB'
 # 如果为 None: 使用全部 43 个类别
 # 如果为列表: 仅使用列表中的类别索引 (例如 [0, 1, 2] 只训练前三类)
 # 这对于快速验证或专注于特定交通标志非常有用
-# GTSRB_SUBSET_INDICES = [12,13, 14, 15,17, 33, 34, 35,36,37,38,39,40]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
-GTSRB_SUBSET_INDICES = None  # 示例: Stop, No Entry, Turn Right, Turn Left, Ahead Only
+GTSRB_SUBSET_INDICES = [12,13, 14, 15,17, 33, 34, 35,36,37,38,39,40]  # 示例: Yield, Stop, No vehicles, No Entry, Turn Right, Turn Left, Ahead Only,
+# GTSRB_SUBSET_INDICES = None  # 示例: Stop, No Entry, Turn Right, Turn Left, Ahead Only
 
 # [CIFAR100 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 100 个类别
@@ -185,7 +185,7 @@ TARGET_SIZE = CURRENT_DATA_CONFIG['target_size']
 # ==========================================
 # 3. 全局训练配置   /*
 # ==========================================
-BATCH_SIZE = 2
+BATCH_SIZE = 8
 EPOCHS = 150
 LR = 0.0001
 SEED = 42
@@ -194,10 +194,10 @@ DATA_ROOT = './data'
 # ==========================================
 # 4. DFM-FNCN 模糊模型特定配置
 # ==========================================
-MAX_RULES = 300
+MAX_RULES = 200
 # 针对 GTSRB 这种复杂数据集，建议适当放宽阈值或增大 Sigma
-PHI_TH = np.exp(-40)
-INIT_SIGMA = 1.2
+PHI_TH = np.exp(-60)
+INIT_SIGMA = 1.05
 # ==========================================
 # [创新点 1] 结构设计创新：添加通道注意力机制
 # ==========================================
@@ -220,9 +220,9 @@ CNN_DROPOUT = 0.5
 # 6. 特征提取器输出配置
 # ==========================================
 N_CHANNELS_OUT =128
-if DATASET_NAME == 'VEHICLES'or DATASET_NAME == 'GTSRB':
+if DATASET_NAME == 'VEHICLES':
     IMG_DIM_OUT = 15
-elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST' or DATASET_NAME == 'SHAPES_CLASSIFICATION' :
+elif DATASET_NAME == 'FASHION_MNIST' or DATASET_NAME == 'MNIST' or DATASET_NAME == 'SHAPES_CLASSIFICATION' or DATASET_NAME == 'GTSRB':
     IMG_DIM_OUT = 6
 else:
     IMG_DIM_OUT = 7
@@ -267,8 +267,8 @@ USE_GAN_DECODER = True  # 是否使用GAN作为解码器
 GAN_ADVERSARIAL_WEIGHT = 0.00001  # 对抗损失权重 (相对于重建损失)：
 # 如果生成的图像纹理乱七八糟但轮廓对，说明对抗权重太大，减小它。
 # 如果生成的图像依然模糊，说明对抗权重太小，增大它。
-GAN_DISCRIMINATOR_LR = 0.0002  # 判别器学习率
-GAN_GENERATOR_LR = 0.001  # 生成器学习率 (与解码器学习率相同)
+GAN_DISCRIMINATOR_LR = 0.00004  # 判别器学习率
+GAN_GENERATOR_LR = 0.0002  # 生成器学习率 (与解码器学习率相同)
 GAN_DISCRIMINATOR_UPDATE_RATIO = 1  # 每训练生成器一次，训练判别器的次数
 GAN_USE_LSGAN = True  # 使用LSGAN (最小二乘GAN) 损失，否则使用BCE
 
