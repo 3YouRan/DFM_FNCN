@@ -794,64 +794,38 @@ class PlantNetANFIS(nn.Module):
         num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
         self.use_fuzzy_layer = use_fuzzy_layer
         
-        # --- Block 1 ---
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        # --- Block 2 ---
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.relu2 = nn.ReLU()
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        # --- Block 3 ---
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(128)
-        self.relu3 = nn.ReLU()
-        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.extractor = PretrainedResNetFeatureExtractor()
 
         # --- Fuzzy Block ---
         # 论文指出使用了 Fuzzy Layer。这里我们将卷积特征输入到模糊层。
         self.num_mf = 2  # 每个通道的隶属函数数量
         if self.use_fuzzy_layer:
             self.fuzzy_layer = GaussianFuzzyLayer(
-                in_channels=128, 
+                in_channels=cfg.N_CHANNELS_OUT, 
                 num_membership_functions=self.num_mf
+            )
+            self.fuzzy_reduce = nn.Sequential(
+                nn.Conv2d(cfg.N_CHANNELS_OUT * self.num_mf, cfg.N_CHANNELS_OUT, kernel_size=1, bias=False),
+                nn.BatchNorm2d(cfg.N_CHANNELS_OUT),
+                nn.ReLU(inplace=True)
             )
         else:
             self.fuzzy_layer = None
+            self.fuzzy_reduce = nn.Identity()
         
         # --- Fully Connected ---
         # 使用动态计算，先占位，初始化时通过 dummy input 计算实际维度
         self.dropout = nn.Dropout(0.5)
-        self.fc1 = nn.Identity()  # 占位，初始化后替换
-        self.fc2 = nn.Linear(512, num_classes)
-        
-        # 通过 dummy input 计算展平后的维度
-        self._init_fc_layers()
-    
-    def _init_fc_layers(self):
-        """通过 dummy input 动态计算全连接层的输入维度"""
-        with torch.no_grad():
-            # 使用配置中的 TARGET_SIZE
-            dummy_input = torch.randn(1, self.conv1.in_channels, *cfg.TARGET_SIZE)
-            x = self._forward_features(dummy_input)
-            flat_dim = x.view(1, -1).shape[1]
-            
-            # 重新创建全连接层
-            self.fc1 = nn.Linear(flat_dim, 512)
-            print(f"PlantNetANFIS: 动态计算的展平维度 = {flat_dim} (输入尺寸: {cfg.TARGET_SIZE})")
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc1 = nn.Linear(cfg.N_CHANNELS_OUT, 256)
+        self.fc2 = nn.Linear(256, num_classes)
     
     def _forward_features(self, x):
-        """提取特征的辅助方法"""
-        x = self.pool1(self.relu1(self.bn1(self.conv1(x))))
-        x = self.pool2(self.relu2(self.bn2(self.conv2(x))))
-        x = self.pool3(self.relu3(self.bn3(self.conv3(x))))
+        x = self.extractor(x)
         
         if self.use_fuzzy_layer and self.fuzzy_layer is not None:
             x = self.fuzzy_layer(x)
+            x = self.fuzzy_reduce(x)
         
         return x
 
@@ -861,7 +835,7 @@ class PlantNetANFIS(nn.Module):
         # 提取特征
         x = self._forward_features(x)
 
-        # Flatten
+        x = self.global_pool(x)
         x = torch.flatten(x, 1)
 
         x = self.dropout(x)
@@ -969,6 +943,143 @@ def get_plantnet_model(model_type='ANFIS', num_classes=None, in_channels=3):
         return PlantNetSimple(num_classes=num_classes, in_channels=in_channels)
     else:
         raise ValueError(f"Unknown PlantNet model type: {model_type}")
+
+
+# =========================================================================
+# Yalcinkaya-Erbas 对比算法 (2021 Melanoma Diagnosis System)
+# =========================================================================
+
+class FuzzyCorrelationMap(nn.Module):
+    """
+    Engineering reproduction of the fuzzy correlation map described by
+    Yalcinkaya & Erbas (2021).
+
+    The paper uses four fuzzy inputs and 3 linguistic sets per input,
+    yielding 81 fuzzy rules before the modified AlexNet classifier.
+    The published paper does not provide exact numerical membership
+    parameters, so this implementation follows the same 4-input / 81-rule
+    structure with normalized triangular memberships.
+    """
+    def __init__(self):
+        super(FuzzyCorrelationMap, self).__init__()
+        compass_kernel = torch.ones(1, 1, 3, 3) / 8.0
+        compass_kernel[:, :, 1, 1] = 0.0
+        self.register_buffer('compass_kernel', compass_kernel)
+
+    @staticmethod
+    def _normalize_per_image(x, eps=1e-6):
+        flat = x.flatten(1)
+        min_val = flat.min(dim=1)[0].view(-1, 1, 1, 1)
+        max_val = flat.max(dim=1)[0].view(-1, 1, 1, 1)
+        return (x - min_val) / (max_val - min_val + eps)
+
+    @staticmethod
+    def _triangular_membership(x):
+        low = torch.clamp(1.0 - 2.0 * x, min=0.0, max=1.0)
+        mid = torch.clamp(1.0 - 2.0 * torch.abs(x - 0.5), min=0.0, max=1.0)
+        high = torch.clamp(2.0 * x - 1.0, min=0.0, max=1.0)
+        return torch.stack([low, mid, high], dim=2)
+
+    @staticmethod
+    def _make_distance_vector(batch_size, height, width, device, dtype):
+        yy, xx = torch.meshgrid(
+            torch.arange(height, device=device, dtype=dtype),
+            torch.arange(width, device=device, dtype=dtype),
+            indexing='ij'
+        )
+        cy = (height - 1) / 2.0
+        cx = (width - 1) / 2.0
+        distance = torch.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+        distance = distance / (distance.max() + 1e-6)
+        return distance.view(1, 1, height, width).expand(batch_size, 1, height, width)
+
+    def _to_grayscale_01(self, x):
+        if x.max() > 1.0 or x.min() < 0.0:
+            x = (x + 1.0) / 2.0
+        x = torch.clamp(x, 0.0, 1.0)
+
+        if x.size(1) == 3:
+            return 0.299 * x[:, 0:1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+        return x.mean(dim=1, keepdim=True)
+
+    def forward(self, x):
+        gray = self._to_grayscale_01(x)
+        batch_size, _, height, width = gray.shape
+
+        compass_mean = F.conv2d(gray, self.compass_kernel.to(gray.dtype), padding=1)
+        local_mean = F.avg_pool2d(gray, kernel_size=3, stride=1, padding=1)
+        local_sq_mean = F.avg_pool2d(gray * gray, kernel_size=3, stride=1, padding=1)
+        covariance = torch.relu(local_sq_mean - local_mean * local_mean)
+        distance = self._make_distance_vector(batch_size, height, width, gray.device, gray.dtype)
+
+        fuzzy_inputs = [
+            1.0 - self._normalize_per_image(compass_mean),
+            1.0 - distance,
+            1.0 - gray,
+            self._normalize_per_image(covariance)
+        ]
+        memberships = [self._triangular_membership(v) for v in fuzzy_inputs]
+
+        weighted_sum = torch.zeros_like(gray)
+        rule_strength_sum = torch.zeros_like(gray)
+        output_levels = gray.new_tensor([0.25, 0.50, 0.75])
+
+        for compass_idx in range(3):
+            for distance_idx in range(3):
+                for intensity_idx in range(3):
+                    for covariance_idx in range(3):
+                        strength = (
+                            memberships[0][:, :, compass_idx] *
+                            memberships[1][:, :, distance_idx] *
+                            memberships[2][:, :, intensity_idx] *
+                            memberships[3][:, :, covariance_idx]
+                        )
+
+                        level = (compass_idx + distance_idx + intensity_idx + covariance_idx) / 4.0
+                        output_idx = int(round(level))
+                        weighted_sum = weighted_sum + strength * output_levels[output_idx]
+                        rule_strength_sum = rule_strength_sum + strength
+
+        return weighted_sum / (rule_strength_sum + 1e-5)
+
+
+class YalcinkayaErbasFCovAlexNet(nn.Module):
+    """
+    Fuzzy correlation map preprocessing followed by the unified
+    RESNET18_PRETRAINED CNN backbone.
+    """
+    def __init__(self, num_classes=None, pretrained=False):
+        super(YalcinkayaErbasFCovAlexNet, self).__init__()
+        num_classes = num_classes if num_classes is not None else cfg.N_CLASSES
+        self.fuzzy_map = FuzzyCorrelationMap()
+        self.extractor = PretrainedResNetFeatureExtractor()
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(0.5),
+            nn.Linear(cfg.N_CHANNELS_OUT, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes)
+        )
+
+    def forward(self, x):
+        fuzzy_map = self.fuzzy_map(x)
+        if fuzzy_map.ndim == 5 and fuzzy_map.size(2) == 1:
+            fuzzy_map = fuzzy_map.squeeze(2)
+        if cfg.IN_CHANNELS == 1:
+            cnn_input = fuzzy_map
+        else:
+            cnn_input = fuzzy_map.repeat(1, cfg.IN_CHANNELS, 1, 1)
+        features = self.extractor(cnn_input)
+        features = self.global_pool(features)
+        return self.classifier(features)
+
+
+def get_yalcinkaya_erbas_model(num_classes=None, pretrained=None):
+    if pretrained is None:
+        pretrained = getattr(cfg, 'YALCINKAYA_ALEXNET_PRETRAINED', False)
+    return YalcinkayaErbasFCovAlexNet(num_classes=num_classes, pretrained=pretrained)
 
 
 # =========================================================================
@@ -1300,7 +1411,7 @@ class FuzzyLayer(nn.Module):
         # 计算高斯隶属度: exp(- (x - c)^2 / (2 * sigma^2))
         # 结果形状: (B, C, Num_Rules, H, W)
         numerator = (x_expanded - self.centers) ** 2
-        denominator = 2 * (self.sigmas ** 2) + 1e-8 # 加极小值防止除零
+        denominator = 2 * (self.sigmas ** 2) + 1e-6 # 加极小值防止除零
         membership = torch.exp(-numerator / denominator)
         
         # 将模糊集维度合并到通道维度，以便后续卷积处理
@@ -1328,37 +1439,17 @@ class HP_FCNN(nn.Module):
         # ---------------------------
         # 分支 A: 清晰卷积流 (Crisp CNN Stream)
         # ---------------------------
-        self.crisp_stream = nn.Sequential(
-            # Block 1
-            nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2), # /2
-            
-            # Block 2
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2), # /4
-            
-            # Block 3
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)  # /8
-        )
+        self.crisp_stream = PretrainedResNetFeatureExtractor()
+        self.fuzzy_stream = PretrainedResNetFeatureExtractor()
         
         # ---------------------------
         # 分支 B: 模糊流 (Fuzzy Stream)
         # ---------------------------
         # 这里的逻辑是：先通过模糊层提取隶属度，再通过卷积层聚合模糊信息
-        self.fuzzy_in_channels = 32 # 假设我们在第一层卷积后分叉
-        self.pre_fuzzy_conv = nn.Sequential(
-            nn.Conv2d(in_channels, self.fuzzy_in_channels, kernel_size=3, padding=1),
-            nn.ReLU()
-        )
+        self.fuzzy_in_channels = in_channels
+        self.fuzzy_projection = nn.Identity()
         
-        self.fuzzy_sets = 4 # 每个通道定义4个模糊语义 (如: Low, Med-Low, Med-High, High)
+        self.fuzzy_sets = 6
         self.fuzzy_layer = FuzzyLayer(self.fuzzy_in_channels, self.fuzzy_sets)
         
         # 模糊特征聚合层 (将膨胀的模糊通道压缩回来)
@@ -1379,6 +1470,11 @@ class HP_FCNN(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d(2)  # /8
         )
+        self.fuzzy_projection = nn.Sequential(
+            nn.Conv2d(self.fuzzy_in_channels * self.fuzzy_sets, in_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True)
+        )
 
         # ---------------------------
         # 融合与分类 (Fusion & Classifier)
@@ -1386,11 +1482,11 @@ class HP_FCNN(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
         
         # 融合后的维度 = Crisp输出通道(128) + Fuzzy输出通道(128)
-        self.fusion_dim = 128 + 128 
+        self.fusion_dim = cfg.N_CHANNELS_OUT + cfg.N_CHANNELS_OUT 
         
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(self.fusion_dim, 256),
+            nn.Linear(self.fusion_dim,256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.5),
@@ -1403,11 +1499,12 @@ class HP_FCNN(nn.Module):
         
         # --- 分支 B: Fuzzy Path ---
         # 1. 预处理
-        x_fuzzy_pre = self.pre_fuzzy_conv(x)
+        x_fuzzy_projected = x
         # 2. 模糊化 (Fuzzification) - 核心并行步骤
-        x_fuzzy_membership = self.fuzzy_layer(x_fuzzy_pre)
+        x_fuzzy_membership = self.fuzzy_layer(x_fuzzy_projected)
         # 3. 模糊特征提取
-        fuzzy_feat = self.fuzzy_stream_conv(x_fuzzy_membership)
+        x_fuzzy_projected = self.fuzzy_projection(x_fuzzy_membership)
+        fuzzy_feat = self.fuzzy_stream(x_fuzzy_projected)
         
         # --- 融合 (Fusion) ---
         # 确保两个分支的空间维度一致
@@ -1469,6 +1566,8 @@ def get_model(model_type=None, num_classes=None, in_channels=3):
         return get_plantnet_model('SIMPLE', num_classes=num_classes, in_channels=in_channels)
     elif model_type == 'OSTEONET':
         return get_osteonet_model('resnet18', num_classes=num_classes)
+    elif model_type == 'YALCINKAYA_ERBAS':
+        return get_yalcinkaya_erbas_model(num_classes=num_classes)
     elif model_type == 'HP_FCNN':
         return get_hpfcnn_model(num_classes=num_classes, in_channels=in_channels)
     else:

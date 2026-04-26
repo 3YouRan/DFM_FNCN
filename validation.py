@@ -15,7 +15,7 @@ import medmnist
 from medmnist import BloodMNIST
 
 import config as cfg
-from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple, OsteoNet, OsteoNetSimple, HP_FCNN
+from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple, OsteoNet, OsteoNetSimple, HP_FCNN, get_yalcinkaya_erbas_model
 
 # 移除硬编码的 RUN_DIR_TO_VALIDATE
 
@@ -29,6 +29,10 @@ def configure_model_from_checkpoint(checkpoint):
     cfg.MODEL_TYPE = params['MODEL_TYPE']
     cfg.EXTRACTOR_TYPE = params['EXTRACTOR_TYPE']
     cfg.DATASET_NAME = params['DATASET_NAME']
+    if 'YALCINKAYA_ALEXNET_PRETRAINED' in params:
+        cfg.YALCINKAYA_ALEXNET_PRETRAINED = params['YALCINKAYA_ALEXNET_PRETRAINED']
+    if 'YALCINKAYA_ALEXNET_INPUT_SIZE' in params:
+        cfg.YALCINKAYA_ALEXNET_INPUT_SIZE = params['YALCINKAYA_ALEXNET_INPUT_SIZE']
 
     config_data = cfg.DATASET_CONFIGS[cfg.DATASET_NAME]
     cfg.N_CLASSES = config_data['n_classes']
@@ -74,6 +78,8 @@ def load_model_and_config(model_path):
     elif cfg.MODEL_TYPE == 'HP_FCNN':
         # HP-FCNN: 并行架构模糊 CNN (Iqbal et al., 2024)
         model = HP_FCNN(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'YALCINKAYA_ERBAS':
+        model = get_yalcinkaya_erbas_model(num_classes=cfg.N_CLASSES).to(cfg.DEVICE)
     else:
         raise ValueError(f"未知的 MODEL_TYPE: {cfg.MODEL_TYPE}")
 
@@ -223,6 +229,8 @@ def run_inference(model, loader):
                 outputs = logits
             elif cfg.MODEL_TYPE == 'HP_FCNN':
                 # HP-FCNN 直接返回 logits
+                outputs = model(data)
+            elif cfg.MODEL_TYPE == 'YALCINKAYA_ERBAS':
                 outputs = model(data)
             else:
                 outputs = model(data)

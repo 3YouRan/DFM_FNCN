@@ -155,7 +155,7 @@ except ImportError:
 # 移除硬编码的 RUN_DIR_TO_LOAD
 
 DECODER_EPOCHS = 300
-DECODER_LR = 0.0002
+DECODER_LR = 0.001 
 BATCH_SIZE = 512
 
 def set_random_seed(seed):

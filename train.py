@@ -23,7 +23,7 @@ from sklearn.cluster import MiniBatchKMeans
 import logging  # 新增：导入日志模块
 
 import config as cfg
-from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple, OsteoNet, OsteoNetSimple, get_osteonet_model, HP_FCNN, get_hpfcnn_model
+from models import FullModel, TraditionalCNNModel, PlantNetANFIS, PlantNetSimple, OsteoNet, OsteoNetSimple, get_osteonet_model, HP_FCNN, get_hpfcnn_model, get_yalcinkaya_erbas_model
 
 CLASS_NAMES = cfg.CLASS_NAMES
 
@@ -536,6 +536,8 @@ def train_one_epoch(model, train_loader, criterion, optimizer, epoch, scaler, lo
             elif cfg.MODEL_TYPE == 'HP_FCNN':
                 # HP-FCNN 直接返回 logits
                 output = model(data)
+            elif cfg.MODEL_TYPE == 'YALCINKAYA_ERBAS':
+                output = model(data)
             else:
                 output = model(data)
             loss = criterion(output, target)
@@ -590,6 +592,8 @@ def evaluate(model, test_loader, criterion, logger=None):
                     output = logits
                 elif cfg.MODEL_TYPE == 'HP_FCNN':
                     # HP-FCNN 直接返回 logits
+                    output = model(data)
+                elif cfg.MODEL_TYPE == 'YALCINKAYA_ERBAS':
                     output = model(data)
                 else:
                     output = model(data)
@@ -797,6 +801,8 @@ def run_training():
     elif cfg.MODEL_TYPE == 'OSTEONET':
         # OsteoNet: 顺序架构模糊 CNN，使用预训练的 ResNet18 作为骨干
         model = OsteoNet(model_name='resnet18', num_classes=cfg.N_CLASSES, pretrained=True).to(cfg.DEVICE)
+    elif cfg.MODEL_TYPE == 'YALCINKAYA_ERBAS':
+        model = get_yalcinkaya_erbas_model(num_classes=cfg.N_CLASSES).to(cfg.DEVICE)
     elif cfg.MODEL_TYPE == 'HP_FCNN':
         # HP-FCNN: 并行架构模糊 CNN (Iqbal et al., 2024)
         model = HP_FCNN(num_classes=cfg.N_CLASSES, in_channels=cfg.IN_CHANNELS).to(cfg.DEVICE)
@@ -855,7 +861,9 @@ def run_training():
                     'USE_RULE_MERGING': cfg.USE_RULE_MERGING,
                     'GTSRB_SUBSET_INDICES': cfg.GTSRB_SUBSET_INDICES,
                     'INIT_SIGMA': cfg.INIT_SIGMA,
-                    'PHI_TH': cfg.PHI_TH
+                    'PHI_TH': cfg.PHI_TH,
+                    'YALCINKAYA_ALEXNET_PRETRAINED': getattr(cfg, 'YALCINKAYA_ALEXNET_PRETRAINED', False),
+                    'YALCINKAYA_ALEXNET_INPUT_SIZE': getattr(cfg, 'YALCINKAYA_ALEXNET_INPUT_SIZE', 227)
                 }
             }, best_model_save_path)
             best_msg = f"    *** 新最佳权重 (Acc: {best_acc:.2f}%) ***"

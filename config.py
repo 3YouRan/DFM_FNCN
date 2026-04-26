@@ -7,8 +7,8 @@ import medmnist
 # ==========================================
 # 选择要使用的数据集
 # 可选值: 'FASHION_MNIST', 'SVHN', 'BLOOD_MNIST', 'GTSRB', 'MNIST', 'CIFAR10', 'CIFAR100', 'GEOMETRIC_SHAPES', 'MIO_TCD_CLASSIFICATION', 'VEHICLES', 'SHAPES_CLASSIFICATION'
-DATASET_NAME = 'GTSRB'
-
+DATASET_NAME = 'FASHION_MNIST'
+ 
 # [GTSRB 专属配置] 选择要训练的类别子集
 # 如果为 None: 使用全部 43 个类别
 # 如果为列表: 仅使用列表中的类别索引 (例如 [0, 1, 2] 只训练前三类)
@@ -28,13 +28,48 @@ CIFAR100_SUBSET_NAMES = None    # 使用名称选择，例如 ['apple', 'aquariu
 # 'TRADITIONAL_CNN': 传统的深度卷积神经网络
 # 'PLANTNET_ANFIS': PlantNet 对比算法 (带模糊层)
 # 'PLANTNET_SIMPLE': PlantNet 简化版 CNN (不含模糊层)
-# 'OSTEONET': OsteoNet 模糊对比增强CNN (顺序架构深度模糊模型，对比模型)
+# 'OSTEONET': OsteoNet 模糊对比增强CNN (顺序架构深度模糊模型，对比模型)///
+# MODEL_TYPE = 'YALCINKAYA_ERBAS'
 # 'HP_FCNN': Hybrid Parallel Fuzzy CNN (并行架构深度模糊模型，Iqbal et al., 2024)
-MODEL_TYPE = 'DFM_FNCN'
+# 选择模型结构
+# 可选值:
+# 'DFM_FNCN': 主模型
+# 'TRADITIONAL_CNN': 传统 CNN 对比模型
+# 'PLANTNET_ANFIS': PlantNet 模糊对比模型
+# 'PLANTNET_SIMPLE': PlantNet 简化版 CNN
+# 'OSTEONET': OsteoNet 对比模型
+# 'YALCINKAYA_ERBAS': Yalcinkaya & Erbas 2021 对比模型
+# 'HP_FCNN': Hybrid Parallel Fuzzy CNN 对比模型
+#
+# 使用方法:
+# 直接把 MODEL_TYPE 改成目标模型名即可，例如:
+# MODEL_TYPE = 'HP_FCNN'
+# MODEL_TYPE = 'PLANTNET_ANFIS'
+# MODEL_TYPE = 'YALCINKAYA_ERBAS'
+#
+# 注意:
+# 目前 HP_FCNN、PLANTNET_ANFIS、YALCINKAYA_ERBAS 这三个对比模型
+# 内部使用的 CNN 主体都已经统一为 RESNET18_PRETRAINED。
+MODEL_TYPE = 'HP_FCNN'
 
 # 选择特征提取器
 # 'RESNET18_PRETRAINED', 'VGG16_PRETRAINED', 'SIMPLE_CNN'
+# 选择特征提取器
+# 可选值: 'RESNET18_PRETRAINED', 'VGG16_PRETRAINED', 'SIMPLE_CNN'
+# 使用建议:
+# 1. DFM_FNCN / TRADITIONAL_CNN 会直接使用这里的设置
+# 2. 做公平对比时，建议保持为 'RESNET18_PRETRAINED'
+# 3. 对于 HP_FCNN、PLANTNET_ANFIS、YALCINKAYA_ERBAS，一般保持默认即可
 EXTRACTOR_TYPE = 'RESNET18_PRETRAINED'
+
+# Yalcinkaya & Erbas (2021) 对比模型配置
+# Yalcinkaya & Erbas (2021) 对比模型配置
+# 说明:
+# 这两个参数现在主要为了兼容旧实验记录和旧检查点而保留。
+# 当前实现中，YALCINKAYA_ERBAS 的 CNN 主体也已经统一为 RESNET18_PRETRAINED，
+# 因此正常训练时通常不需要修改这里。
+YALCINKAYA_ALEXNET_PRETRAINED = False
+YALCINKAYA_ALEXNET_INPUT_SIZE = 227
 
 # ==========================================
 # 2. 数据集配置 (Dataset Configuration)
@@ -267,8 +302,8 @@ USE_GAN_DECODER = True  # 是否使用GAN作为解码器
 GAN_ADVERSARIAL_WEIGHT = 0.00001  # 对抗损失权重 (相对于重建损失)：
 # 如果生成的图像纹理乱七八糟但轮廓对，说明对抗权重太大，减小它。
 # 如果生成的图像依然模糊，说明对抗权重太小，增大它。
-GAN_DISCRIMINATOR_LR = 0.00004  # 判别器学习率
-GAN_GENERATOR_LR = 0.0002  # 生成器学习率 (与解码器学习率相同)
+GAN_DISCRIMINATOR_LR = 0.0002  # 判别器学习率
+GAN_GENERATOR_LR = 0.001  # 生成器学习率 (与解码器学习率相同)
 GAN_DISCRIMINATOR_UPDATE_RATIO = 1  # 每训练生成器一次，训练判别器的次数
 GAN_USE_LSGAN = True  # 使用LSGAN (最小二乘GAN) 损失，否则使用BCE
 

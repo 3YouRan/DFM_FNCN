@@ -2065,7 +2065,7 @@ def run_visualization(run_dir, compare_decoders=True):
 
 if __name__ == '__main__':
     # 仅用于单独测试
-    TEST_DIR = 'record\\GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20260408_182253'
+    TEST_DIR = 'record\GTSRB_DFM_FNCN_RESNET18_PRETRAINED_20260408_182253 copy'
     
     
     
